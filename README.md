@@ -1,0 +1,15 @@
+Struttura del progetto:
+- configs:
+  - file YAML
+- src 
+  - models -> modelli deep learning
+  - utils -> metriche, logging, seed, transforms
+  - ulteriori .py per train, eval
+- scripts -> script vari di utility
+- data
+  - raw_clips -> .mp4 scaricati da youtube e tagliati in clip secondo le info trovate in dolos_timestamps.csv
+  - metadata -> .csv e .txt con il mapping dei soggetti e dei video 
+  - splits -> .csv per lo split del dataset
+  - openface -> un .csv per ciascuna clip con AUs, pose, gaze e landmarks
+  - frames -> una cartella per ciascuna clip con dentro i frame della clip
+- experiments -> una cartella per ciascuna run con dentro tutte le metriche salvate

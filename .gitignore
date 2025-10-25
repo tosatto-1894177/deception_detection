@@ -1,0 +1,14 @@
+# JetBrains / PyCharm
+.idea/
+*.iml
+
+# Ambienti Python
+.venv/
+venv/
+env/
+
+# Output e cache
+__pycache__/
+*.pyc
+data/
+experiments/
