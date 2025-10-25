@@ -1,0 +1,211 @@
+# ============================================
+# CONFIGURAZIONE PROGETTO DECEPTION DETECTION
+# ============================================
+
+# -------------------- PATHS --------------------
+paths:
+  # Directory con i video originali DOLOS
+  video_dir: "data/raw_clips"
+
+  # Directory dove salvare i frame estratti con face crops
+  frames_dir: "data/frames"
+
+  # File CSV con annotazioni MUMIN
+  train_annotations: "data/metadata/train_dolos.xlsx"
+
+  # Directory per salvare modelli e checkpoint
+  models_dir: "src/models"
+
+  # Directory per log e risultati
+  results_dir: "data/experiments"
+
+
+# -------------------- PREPROCESSING --------------------
+preprocessing:
+  # Frame extraction
+  fps: 5  # Frame per secondo da estrarre
+  img_size: [224, 224]  # Dimensione frame [width, height]
+  max_frames: 100  # Numero massimo di frame per clip (None per illimitato)
+
+  # Face detection
+  face_detection:
+    method: "haar"  # Opzioni: 'haar' (veloce), 'mtcnn' (accurato), 'retinaface' (best)
+    margin: 0.3  # Margine attorno al volto (0.3 = 30%)
+    save_failed_frames: true  # Salva frame anche se face detection fallisce
+    device: "cuda"  # 'cpu' o 'cuda'
+
+
+# -------------------- DATASET --------------------
+dataset:
+  # Train/Val/Test split (se non hai split predefiniti)
+  train_ratio: 0.7
+  val_ratio: 0.15
+  test_ratio: 0.15
+
+  # Random seed per riproducibilità
+  seed: 42
+
+  # Behavioral features MUMIN (per uso futuro con OpenFace)
+  use_behavioral_features: false
+
+  # Data augmentation (per training)
+  augmentation:
+    enabled: true
+    random_horizontal_flip: 0.5  # Probabilità flip orizzontale
+    color_jitter:
+      brightness: 0.2
+      contrast: 0.2
+      saturation: 0.1
+      hue: 0.05
+
+
+# -------------------- MODEL --------------------
+model:
+  name: "model_0"
+
+  # ResNet backbone
+  resnet:
+    architecture: "resnet34"  # 'resnet34' o 'resnet50'
+    pretrained: true
+    freeze_layers: true  # Congela ResNet (solo feature extraction)
+    # Layers da sbloccare se freeze_layers=false (per fine-tuning)
+    unfreeze_from: "layer4"  # 'layer1', 'layer2', 'layer3', 'layer4'
+
+  # Temporal Convolutional Network
+  tcn:
+    num_layers: 3  # Numero di layer TCN
+    kernel_size: 3  # Dimensione kernel temporale
+    dropout: 0.2
+    hidden_channels: [256, 256, 256]  # Canali per ogni layer
+
+  # Attention pooling
+  attention:
+    type: "temporal"  # 'temporal' o 'self-attention'
+    hidden_dim: 128
+    num_heads: 1  # Per multi-head attention
+
+  # MLP classifier finale
+  classifier:
+    hidden_dims: [128, 64]  # Layer nascosti MLP
+    dropout: 0.3
+    num_classes: 2  # 0=truth, 1=deception
+
+
+# -------------------- TRAINING --------------------
+training:
+  # Hyperparameters
+  batch_size: 8
+  num_epochs: 50
+  learning_rate: 0.001
+  weight_decay: 0.0001
+
+  # Optimizer
+  optimizer: "adam"  # 'adam', 'sgd', 'adamw'
+
+  # Learning rate scheduler
+  scheduler:
+    type: "step"  # 'step', 'cosine', 'plateau', null (nessuno)
+    step_size: 10  # Per StepLR
+    gamma: 0.5  # Riduzione LR
+    patience: 5  # Per ReduceLROnPlateau
+
+  # Loss function
+  loss:
+    type: "cross_entropy"  # 'cross_entropy', 'focal_loss'
+    class_weights: null  # [1.0, 1.0] o null per weights automatici
+
+  # Early stopping
+  early_stopping:
+    enabled: true
+    patience: 10
+    min_delta: 0.001
+
+  # Gradient clipping
+  gradient_clip: 1.0  # null per disabilitare
+
+  # Device
+  device: "cuda"  # 'cuda' o 'cpu'
+  num_workers: 4  # Worker per DataLoader
+  pin_memory: true  # Accelera trasferimento a GPU
+
+
+# -------------------- VALIDATION --------------------
+validation:
+  # Frequenza validazione
+  validate_every: 1  # Ogni N epoch
+
+  # Metriche da calcolare
+  metrics:
+    - "accuracy"
+    - "precision"
+    - "recall"
+    - "f1"
+    - "auc_roc"
+    - "confusion_matrix"
+
+  # Salvataggio checkpoint
+  save_best_only: true  # Salva solo il migliore
+  save_every_n_epochs: 5  # Salva ogni N epoch
+
+
+# -------------------- TESTING --------------------
+testing:
+  # Checkpoint da usare per test
+  checkpoint_path: "models/best_model.pth"
+
+  # Batch size per test (può essere più grande del training)
+  batch_size: 16
+
+  # Visualizzazioni
+  save_predictions: true
+  save_attention_maps: true  # Salva mappe di attention
+  save_misclassified: true  # Salva esempi sbagliati
+
+
+# -------------------- LOGGING --------------------
+logging:
+  # Wandb (Weights & Biases)
+  wandb:
+    enabled: false
+    project: "deception-detection"
+    entity: null  # Tuo username wandb
+    name: "experiment_1"
+
+  # TensorBoard
+  tensorboard:
+    enabled: true
+    log_dir: "logs/tensorboard"
+
+  # Console logging
+  print_every: 10  # Stampa loss ogni N batch
+
+  # Log file
+  log_file: "logs/training.log"
+
+
+# -------------------- REPRODUCIBILITY --------------------
+reproducibility:
+  seed: 42
+  deterministic: true  # Usa algoritmi deterministici (più lento)
+  benchmark: false  # CuDNN benchmark (più veloce ma non deterministico)
+
+
+# -------------------- EXPERIMENTAL --------------------
+experimental:
+  # OpenFace features (da implementare in futuro)
+  openface:
+    enabled: false
+    features: ["AUs", "gaze", "pose"]
+    fusion_method: "concat"  # 'concat', 'attention', 'mlp'
+
+  # Multi-task learning (da implementare)
+  multitask:
+    enabled: false
+    auxiliary_tasks: ["gender_classification"]
+
+  # Class balancing
+  class_balancing:
+    method: null  # 'oversample', 'undersample', 'weighted_loss', null
+
+  # Mixed precision training
+  mixed_precision: false
