@@ -1,0 +1,373 @@
+# YAML PER CONFIGURAZIONE PROGETTO
+
+# Percorsi delle cartelle
+paths:
+  # INPUT: Video originali scaricati da YouTube e partizionati in clip
+  video_dir: "data/raw_clips"
+
+  # OUTPUT: Qui verranno salvati i frame estratti con volti ritagliati
+  frames_dir: "data/frames"
+
+  # INPUT: File CSV con le annotazioni MUMIN
+  # Ogni riga = una clip con label (truth/deception) + feature comportamentali
+  train_annotations: "data/metadata/train_dolos.xlsx"
+
+  # OUTPUT: Dove salvare i checkpoint del modello durante training
+  models_dir: "src/models/checkpoints"
+
+  # OUTPUT: Log per TensorBoard e file di log testuale
+  logs_dir: "logs"
+
+  # OUTPUT: Risultati finali (metriche, confusion matrix, predizioni)
+  results_dir: "results"
+
+
+# -------------------- PREPROCESSING --------------------
+# Configurazione per l'estrazione dei frame (ESEGUITO UNA VOLTA SOLA)
+preprocessing:
+  # FPS: Quanti frame estrarre per secondo di video
+  # Più basso = meno dati ma più veloce
+  # Utilizzando DOLOS che ha clip tra 2 e 19s, con fps=5 si avranno ~10-95 frame per clip
+  fps: 5
+
+  # DIMENSIONE: Risoluzione finale di ogni frame [larghezza, altezza]
+  # ResNet richiede 224x224 (standard ImageNet)
+  img_size: [224, 224]
+
+  # MAX_FRAMES: Limite massimo frame per clip (per evitare clip troppo lunghe)
+  # - null = nessun limite (usa tutti i frame)
+  max_frames: 50
+
+  # FACE DETECTION: Configurazione rilevamento volti
+  face_detection:
+    # METHOD: Algoritmo per rilevare volti
+    # - 'haar': Veloce, buon compromesso (già in OpenCV, nessuna install extra)
+    # - 'mtcnn': Più accurato, serve: pip install facenet-pytorch
+    # - 'retinaface': Migliore, serve: pip install retinaface-pytorch
+    # CONSIGLIO: Inizia con 'haar', se detection rate è basso (<85%) prova mtcnn
+    # method: "haar"
+
+    # Margine percentuale attorno al volto rilevato
+    # - 0.3 = aggiungi 30% spazio attorno alla bbox del volto (0.2 - 0.4 range ideale)
+    # In questo modo è possibile catturare fronte, capelli e contesto facciale
+    margin: 0.3
+
+    # Cosa fare se non viene rilevato un volto in un frame
+    # - true: Salva comunque il frame intero (come fallback)
+    # - false: Scarta il frame (clip potrebbe avere meno frame)
+    save_failed_frames: true
+
+    # Dove eseguire face detection (haar è sempre CPU)
+    device: "cpu"
+
+
+# DATASET
+# Configurazione caricamento dati per training
+dataset:
+  # SPLIT: non avendo train/val/test separati, li crea automaticamente
+  train_ratio: 0.7
+  val_ratio: 0.15
+  test_ratio: 0.15
+
+  # SEED: Per riproducibilità
+  seed: 42
+
+  # BEHAVIORAL FEATURES: Feature MUMIN (colonne CSV come "Smile", "Gaze", ecc.)
+  # - false: Usa solo video (ResNet)
+  # - true: Carica anche feature MUMIN dall'excel (per fusion futura con OpenFace)
+  use_behavioral_features: false
+
+  # DATA AUGMENTATION
+  augmentation:
+    enabled: true  # Attiva/disattiva tutto
+
+    # FLIP: Probabilità di flip orizzontale del volto
+    # - 0.5 = 50% dei frame vengono flippati durante training
+    # Utile per simmetria facciale, aumentando la varietà
+    random_horizontal_flip: 0.5
+
+    # COLOR JITTER:
+    # Simula diverse condizioni di luce, qualità video. Consigliato valori tra 0.1 e 0.3
+    color_jitter:
+      brightness: 0.2  # ±20% luminosità
+      contrast: 0.2    # ±20% contrasto
+      saturation: 0.1  # ±10% saturazione
+      hue: 0.05        # ±5% tonalità
+
+
+# MODEL
+# Architettura del modello deep learning
+model:
+  name: "model_0_ResNet"  # Nome del modello
+
+  # RESNET: Feature extractor
+  resnet:
+    # ARCHITECTURE: Quale ResNet usare
+    # - 'resnet34': 512 features, più veloce, meno parametri
+    # - 'resnet50': 2048 features, più lento, più parametri
+    architecture: "resnet34"
+
+    # PRETRAINED: Usa pesi pre-allenati su ImageNet
+    # - true: Inizia con conoscenza già acquisita
+    # - false: Inizia da zero
+    pretrained: true
+
+    # FREEZE_LAYERS: Congela ResNet (non aggiorna i suoi pesi)
+    # - true: ResNet usato solo come feature extractor → PIÙ VELOCE, ottimo per iniziare
+    # - false: Fine-tuning (aggiorna anche ResNet) → più lento, migliori risultati
+    # WORKFLOW: Inizia con true, se hai tempo prova false alla fine
+    freeze_layers: true
+
+    # UNFREEZE_FROM: Se freeze_layers=false, da quale layer fare fine-tuning
+    # - 'layer4': Sblocca solo ultimo layer (più conservativo)
+    # - 'layer1': Sblocca tutto (più aggressivo)
+    unfreeze_from: "layer4"
+
+  # TCN: Temporal Convolutional Network (cattura dinamiche temporali)
+  # Prende sequenza di feature da ResNet ed impara pattern nel tempo
+  tcn:
+    # NUM_LAYERS: Profondità della TCN -> più layer indica che che la tcn cattura dipendenze temporali più lunghe
+    # - 2-3 layer: Buon compromesso per clip brevi
+    num_layers: 2
+
+    # KERNEL_SIZE: Finestra temporale che ogni layer analizza, ovvero numero di frame "guardati" insieme. Più il numero è alto e più è ampio il campo recettivo
+    # - 3: 3 frame alla volta
+    kernel_size: 3
+
+    # DROPOUT: Probabilità di "spegnere" neuroni (previene overfitting)
+    # - 0.2 = 20% neuroni spenti casualmente durante training
+    # - Range tipico: 0.1-0.5
+    dropout: 0.2
+
+    # HIDDEN_CHANNELS: Numero di canali (feature) per ogni layer. Più canali migliorano la capacità ma rendono il modello più lento
+    # - [128, 128]: 2 layer con 128 canali ciascuno
+    hidden_channels: [128, 128]
+
+  # ATTENTION: Attention pooling (decide quali frame sono importanti)
+  attention:
+    # TYPE: Tipo di attention
+    # - 'temporal': Attention sui frame (più semplice)
+    # - 'self-attention': Self-attention completa (più complessa)
+    type: "temporal"
+
+    # HIDDEN_DIM: Dimensione layer interno attention
+    hidden_dim: 64
+
+    # NUM_HEADS: Per multi-head attention (se usi self-attention)
+    # - 1: Single-head (più semplice)
+    # - 4-8: Multi-head (più espressiva)
+    num_heads: 1
+
+  # CLASSIFIER: MLP finale (prende feature aggregate → predice truth/lie)
+  classifier:
+    # HIDDEN_DIMS: Layer nascosti dell'MLP. Più layer migliorano la capacità ma aumenta il rischio di overfitting
+    # - [64]: Un layer da 64 neuroni
+    hidden_dims: [64]
+
+    # DROPOUT: Dropout nell'MLP
+    dropout: 0.3
+
+    # NUM_CLASSES: Numero di classi da predire
+    # - 2: Truth (0) vs Deception (1) → BINARIA
+    num_classes: 2
+
+
+# -------------------- TRAINING --------------------
+# Iperparametri per il training
+training:
+  # BATCH_SIZE: Quanti video processare contemporaneamente
+  # - 8: Buon compromesso per GPU con 8-12GB VRAM
+  # - 2: Adatto alla GPU del PC personale
+  batch_size: 2
+
+  # NUM_EPOCHS: Quante volte il modello vede tutto il training set
+  num_epochs: 5
+
+  # LEARNING_RATE: Quanto "velocemente" il modello impara
+  # - 0.001: Standard per Adam optimizer
+  # - Se loss esplode: riduzione a 0.0001
+  # - Se learning troppo lento: aumenta a 0.01
+  learning_rate: 0.001
+
+  # WEIGHT_DECAY: Regolarizzazione L2 (previene overfitting)
+  # - 0.0001: Valore tipico
+  # - Più alto = più regolarizzazione
+  weight_decay: 0.0001
+
+  # OPTIMIZER: Algoritmo di ottimizzazione
+  # - 'adam': Il migliore per la maggior parte dei casi
+  # - 'adamw': Adam con weight decay migliorato
+  optimizer: "adam"
+
+  # SCHEDULER: Come ridurre learning rate nel tempo
+  scheduler:
+    # TYPE: Strategia di riduzione
+    # - 'step': Riduci ogni N epoch
+    # - 'cosine': Riduzione smooth (coseno)
+    # - 'plateau': Riduci quando validation non migliora
+    # - null: Nessuno scheduler (LR fisso)
+    type: "step"
+
+    # STEP_SIZE: Ogni quante epoch ridurre LR (solo per 'step')
+    step_size: 10
+
+    # GAMMA: Fattore di riduzione
+    # - 0.5: Dimezza LR (es. 0.001 → 0.0005 → 0.00025...)
+    gamma: 0.5
+
+    # PATIENCE: Epoch di attesa prima di ridurre (solo per 'plateau')
+    patience: 5
+
+  # LOSS: Funzione di loss
+  loss:
+    type: "cross_entropy"  # Standard per classificazione binaria
+
+    # CLASS_WEIGHTS: Pesi per bilanciare classi sbilanciate
+    # - null: Pesi automatici (calcola da dataset)
+    # - [1.0, 1.5]: Penalizza di più errori sulla classe 1 (deception)
+    class_weights: null
+
+  # EARLY STOPPING: Ferma training se non migliora - evita overfitting e risparmia tempo
+  early_stopping:
+    enabled: true  # Attiva/disattiva
+
+    # PATIENCE: Quante epoch aspettare senza miglioramento prima di fermare
+    patience: 10
+
+    # MIN_DELTA: Miglioramento minimo considerato "vero miglioramento"
+    # - 0.001: Deve migliorare di almeno 0.1% per contare
+    min_delta: 0.001
+
+  # GRADIENT_CLIP: Limita grandezza gradienti (previene esplosioni)
+  # - 1.0: Valore sicuro
+  # - null: Disabilita
+  gradient_clip: 1.0
+
+  # DEVICE: Dove trainare
+  # - 'cuda': GPU
+  # - 'cpu': CPU
+  device: "cuda"
+
+  # NUM_WORKERS: Thread paralleli per caricare
+  # - 0: Disabilita parallelismo (più lento ma debug più facile)
+  num_workers: 2
+
+  # PIN_MEMORY: Ottimizzazione per trasferimento CPU→GPU
+  # - true: Più veloce se usi GPU
+  # - false: Se usi solo CPU o hai problemi memoria
+  pin_memory: true
+
+
+# -------------------- VALIDATION --------------------
+# Come e quando validare durante training
+validation:
+  # VALIDATE_EVERY: Ogni quante epoch fare validazione -> se aumento il valore rendo più veloce il training ma tengo meno informazioni
+  # - 1: Valida dopo ogni epoch
+  validate_every: 1
+
+  # METRICS: Metriche da calcolare su validation set
+  # - accuracy: % predizioni corrette
+  # - precision: Delle predizioni "lie", quante erano vere lie?
+  # - recall: Delle vere lie, quante ne ho predette correttamente?
+  # - f1: Media armonica precision/recall
+  # - auc_roc: Area sotto curva ROC (misura discriminazione)
+  # - confusion_matrix: Matrice confusione (truth→truth, truth→lie, ecc.)
+  metrics:
+    - "accuracy"
+    - "precision"
+    - "recall"
+    - "f1"
+    - "auc_roc"
+    - "confusion_matrix"
+
+  # SAVE_BEST_ONLY: Strategia salvataggio checkpoint
+  # - true: Salva solo il modello con miglior validation
+  # - false: Salva tutti i checkpoint
+  save_best_only: true
+
+  # SAVE_EVERY_N_EPOCHS: Salva checkpoint ogni N epoch (anche se non migliore)
+  # Utile per: avere backup intermedi
+  save_every_n_epochs: 5
+
+
+# -------------------- TESTING --------------------
+# Configurazione per test finale
+testing:
+  # CHECKPOINT_PATH: Quale modello usare per test
+  checkpoint_path: "models/checkpoints/best_model.pth"
+
+  # BATCH_SIZE: Batch size per test
+  batch_size: 16
+
+  # SAVE_PREDICTIONS: Salva predizioni in CSV
+  # Output: clip_name, true_label, predicted_label, confidence
+  save_predictions: true
+
+  # SAVE_ATTENTION_MAPS: Salva visualizzazioni attention
+  # Mostra: quali frame il modello ha guardato di più
+  save_attention_maps: true
+
+  # SAVE_MISCLASSIFIED: Salva esempi classificati male
+  # Utile per: capire dove sbaglia il modello
+  save_misclassified: true
+
+
+# -------------------- LOGGING --------------------
+# Dove e come loggare metriche
+logging:
+  # WANDB: Weights & Biases (servizio online per tracking esperimenti)
+  wandb:
+    enabled: false  # Attiva solo se hai account wandb
+    project: "deception-detection"
+    entity: null  # Tuo username wandb
+    name: "experiment_1"
+
+  # TENSORBOARD: Visualizzazione locale
+  tensorboard:
+    enabled: true  # visualizza con: tensorboard --logdir logs/tensorboard
+    log_dir: "experiments/tensorboard"
+
+  # CONSOLE: Output su terminale
+  print_every: 10  # Stampa loss ogni 10 batch
+
+  # LOG FILE: File testuale con tutto l'output
+  log_file: "experiments/training.log"
+
+
+# REPRODUCIBILITY
+reproducibility:
+  # SEED: per riproducibilità
+  seed: 42
+
+  # DETERMINISTIC: Forza algoritmi deterministici
+  # - true: Stesso risultato ogni run (ma più lento ~10-20%)
+  # - false: Più veloce ma risultati leggermente diversi ogni run
+  deterministic: true
+
+  # BENCHMARK: CuDNN benchmark (ottimizzazione GPU)
+  # - true: Più veloce ma non deterministico
+  # - false: Deterministico
+  # NOTA: Se deterministic=true, questo viene ignorato
+  benchmark: false
+
+
+# -------------------- EXPERIMENTAL --------------------
+# Feature da aggiungere in futuro (per ora lasciale disabilitate)
+experimental:
+  # OPENFACE: Feature aggiuntive (AUs, gaze, pose)
+  openface:
+    enabled: false  # true quando implementi OpenFace
+    features: ["AUs", "gaze", "pose"]
+    fusion_method: "concat"  # Come combinare con feature video
+
+  # CLASS_BALANCING: Gestione classi sbilanciate
+  class_balancing:
+    # Opzioni:
+    # - 'oversample': Duplica campioni classe minoritaria
+    # - 'undersample': Rimuovi campioni classe maggioritaria
+    # - 'weighted_loss': Usa class_weights in loss
+    # - null: Nessun bilanciamento
+    method: null
+
+  # MIXED_PRECISION: Training in precisione mista (FP16)
+  mixed_precision: false
