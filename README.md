@@ -3,6 +3,7 @@ Struttura del progetto:
   - file YAML
 - src 
   - models -> modelli deep learning
+    - checkpoints -> checkpoint dei modelli salvati
   - utils -> metriche, logging, seed, transforms
   - ulteriori .py per train, eval
 - scripts -> script vari di utility

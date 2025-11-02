@@ -3,12 +3,9 @@ import os
 import torch
 from pathlib import Path
 from tqdm import tqdm
-from torch.utils.data import DataLoader
-
-from src import frame_dataset
 
 
-# ============ FACE DETECTION ============
+# Face detection
 
 class FaceDetector:
 
@@ -18,13 +15,11 @@ class FaceDetector:
             device: 'cpu' o 'cuda'
         """
         self.device = device
-        self._init_haar()
-
-    def _init_haar(self):
         """Inizializza Haar Cascade (fallback veloce)."""
         cascade_path = cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
         self.detector = cv2.CascadeClassifier(cascade_path)
         print("✓ Haar Cascade caricato")
+
 
     def detect_and_crop(self, frame, margin=0.3, target_size=(224, 224)):
         """
@@ -36,12 +31,8 @@ class FaceDetector:
             target_size: dimensione output
 
         Returns:
-            face_crop: numpy array del volto ritagliato, None se non trovato
+            face_crop: numpy array del volto ritagliato, None se non trovato -> Face detection con Haar Cascade
         """
-        return self._detect_haar(frame, margin, target_size)
-
-    def _detect_haar(self, frame, margin, target_size):
-        """Face detection con Haar Cascade."""
         gray = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
         faces = self.detector.detectMultiScale(
             gray,
@@ -58,6 +49,7 @@ class FaceDetector:
         x, y, w, h = faces_sorted[0]
 
         return self._crop_with_margin(frame, x, y, x + w, y + h, margin, target_size)
+
 
     @staticmethod
     def _crop_with_margin(frame, x1, y1, x2, y2, margin, target_size):
@@ -84,9 +76,9 @@ class FaceDetector:
         return face_resized
 
 
-# ============ ESTRAZIONE FRAME CON FACE CROP ============
+# Estrazione frame con face crop
 
-def extract_frames_with_faces(video_path, output_dir, fps=5,
+def extract_frames_with_faces(video_path, output_dir, device, fps=5,
                               face_detector=None, img_size=(224, 224),
                               save_failed_frames=False):
     """
@@ -95,6 +87,7 @@ def extract_frames_with_faces(video_path, output_dir, fps=5,
     Args:
         video_path: Path al video
         output_dir: Directory output
+        device: 'cuda' or 'cpu'
         fps: Frame per second da estrarre
         face_detector: Istanza di FaceDetector
         img_size: Dimensione finale
@@ -170,7 +163,7 @@ def extract_frames_with_faces(video_path, output_dir, fps=5,
 
 
 def process_dolos_with_faces(video_dir, output_base_dir, device,
-                             fps=5, img_size=(224, 224)):
+                             fps=5, img_size=(224, 224), save_failed_frames=True):
     """
     Processa dataset DOLOS con face detection.
     """
@@ -180,7 +173,7 @@ def process_dolos_with_faces(video_dir, output_base_dir, device,
     # Inizializza face detector
     face_detector = FaceDetector(device=device)
 
-    video_extensions = ['*.mp4', '*.avi', '*.mov', '*.MP4', '*.AVI', '*.MOV']
+    video_extensions = ['*.mp4', '*.avi', '*.mov']
     video_files = []
     for ext in video_extensions:
         video_files.extend(video_dir.rglob(ext))
@@ -205,7 +198,8 @@ def process_dolos_with_faces(video_dir, output_base_dir, device,
                 fps=fps,
                 face_detector=face_detector,
                 img_size=img_size,
-                save_failed_frames=True  # Salva comunque frame senza volto
+                save_failed_frames=save_failed_frames, # Salva comunque frame senza volto
+                device=device
             )
 
             print(f"{video_path.name}: {result['saved']} frames, "
@@ -216,7 +210,7 @@ def process_dolos_with_faces(video_dir, output_base_dir, device,
             stats['total_failed_detections'] += result['failed']
 
         except Exception as e:
-            print(f"\n⚠ Errore {video_path.name}: {str(e)}")
+            print(f"\n Errore {video_path.name}: {str(e)}")
             stats['failed'] += 1
 
     print(f"\n{'=' * 50}")
@@ -227,25 +221,3 @@ def process_dolos_with_faces(video_dir, output_base_dir, device,
     print(
         f"Detection rate globale: {(stats['total_frames'] / (stats['total_frames'] + stats['total_failed_detections']) * 100):.1f}%")
     print(f"{'=' * 50}")
-
-
-
-def collate_fn_with_padding(batch):
-    """Collate con padding per sequenze variabili."""
-    frames_list, labels, lengths = zip(*batch)
-
-    max_len = max(lengths)
-    batch_size = len(frames_list)
-    C, H, W = frames_list[0].shape[1:]
-
-    padded_frames = torch.zeros(batch_size, max_len, C, H, W)
-    mask = torch.zeros(batch_size, max_len, dtype=torch.bool)
-
-    for i, (frames, length) in enumerate(zip(frames_list, lengths)):
-        padded_frames[i, :length] = frames
-        mask[i, :length] = 1
-
-    labels = torch.tensor(labels, dtype=torch.long)
-    lengths = torch.tensor(lengths, dtype=torch.long)
-
-    return padded_frames, labels, lengths, mask

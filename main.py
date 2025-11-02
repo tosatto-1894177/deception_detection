@@ -8,9 +8,14 @@ from pathlib import Path
 import torch
 from torch.utils.data import DataLoader
 
-from config_loader import load_config
+from src.config_loader import load_config
 from scripts.frame_extractor import process_dolos_with_faces
 from src.frame_dataset import DOLOSFrameDataset, collate_fn_with_padding
+from src.train import train_model
+
+# Ottimizzazioni memoria GPU
+torch.backends.cudnn.benchmark = True
+torch.cuda.empty_cache()
 
 
 def parse_args():
@@ -21,7 +26,7 @@ def parse_args():
                         help='Path al file di configurazione')
 
     parser.add_argument('--mode', type=str,
-                        choices=['preprocess', 'train', 'test'],
+                        choices=['preprocess', 'train', 'test', 'demo'],
                         required=True,
                         help='Modalità di esecuzione')
 
@@ -32,6 +37,10 @@ def parse_args():
     parser.add_argument('--device', type=str, choices=['cpu', 'cuda'],
                         help='Override device')
 
+    # Split type
+    parser.add_argument('--subject_split', action='store_true',
+                        help='Usa subject-independent split (RACCOMANDATO per training finale)')
+
     return parser.parse_args()
 
 
@@ -40,12 +49,15 @@ def preprocess(config):
     Estrai frame dai video con face detection.
     Eseguito UNA VOLTA SOLA all'inizio.
     """
-    print("\n" + "=" * 70)
+    print("\n" + "="*70)
     print("PREPROCESSING: Estrazione frame con face detection")
-    print("=" * 70)
+    print("="*70)
 
     video_dir = Path(config.get('paths.video_dir'))
     frames_dir = Path(config.get('paths.frames_dir'))
+
+    print(f"  Cartella delle clip: {video_dir.resolve()}")
+    print(f"  Frame da salvare in: {frames_dir.resolve()}")
 
     if not video_dir.exists():
         raise FileNotFoundError(f"Directory video non trovata: {video_dir}")
@@ -57,30 +69,67 @@ def preprocess(config):
         output_base_dir=str(frames_dir),
         fps=config.get('preprocessing.fps'),
         img_size=tuple(config.get('preprocessing.img_size')),
-        device=config.get('preprocessing.face_detection.device')
+        device=config.get('preprocessing.face_detection.device'),
+        save_failed_frames=config.get('preprocessing.face_detection.save_failed_frames')
     )
 
     print(f"\n✓ Preprocessing completato!")
     print(f"  Frame salvati in: {frames_dir}")
 
 
-def create_dataloaders(config):
-    """Crea DataLoader per train/val/test."""
-    print("\n" + "=" * 70)
+def create_dataloaders(config, use_subject_split=False):
+    """
+    Crea DataLoader per train/val/test.
+
+    Args:
+        config: Config object
+        use_subject_split: Se True, usa subject-independent split con fold DOLOS
+                          Se False, usa random split (più veloce per test)
+    """
+    print("\n" + "="*70)
     print("CARICAMENTO DATASET")
-    print("=" * 70)
+    print("="*70)
 
     frames_dir = config.get('paths.frames_dir')
     batch_size = config['training']['batch_size']
+    annotation_file = config.get('paths.train_annotations')
 
-    # Training set
-    train_dataset = DOLOSFrameDataset(
-        root_dir=frames_dir,
-        annotation_file=config.get('paths.train_annotations'),
-        max_frames=config.get('preprocessing.max_frames'),
-        use_behavioral_features=config.get('dataset.use_behavioral_features')
-    )
+    if use_subject_split:
+        # Subject-Independent Split (RACCOMANDATO per training finale)
+        print("\n🎓 Usando SUBJECT-INDEPENDENT SPLIT")
 
+        from src.frame_dataset import create_subject_independent_split
+
+        # Path ai fold DOLOS (puoi cambiare fold_idx nel config)
+        fold_idx = config.get('dataset.fold_idx', 1)
+        train_fold_path = Path(f'data/splits/train_fold{fold_idx}.csv')
+        test_fold_path = Path(f'data/splits/test_fold{fold_idx}.csv')
+
+        train_dataset, val_dataset, test_dataset = create_subject_independent_split(
+            frames_dir=frames_dir,
+            annotation_file=annotation_file,
+            train_fold_path=train_fold_path,
+            test_fold_path=test_fold_path,
+            val_ratio=config.get('dataset.val_ratio', 0.2),
+            seed=config.get('dataset.seed', 42)
+        )
+
+    else:
+        # Random Split (VELOCE per test/demo)
+        print("\n⚡ Usando RANDOM SPLIT (veloce per test)")
+
+        from src.frame_dataset import create_random_split
+
+        train_dataset, val_dataset, test_dataset = create_random_split(
+            frames_dir=frames_dir,
+            annotation_file=annotation_file,
+            train_ratio=config.get('dataset.train_ratio', 0.7),
+            val_ratio=config.get('dataset.val_ratio', 0.15),
+            test_ratio=config.get('dataset.test_ratio', 0.15),
+            seed=config.get('dataset.seed', 42)
+        )
+
+    # Crea DataLoaders
     train_loader = DataLoader(
         train_dataset,
         batch_size=batch_size,
@@ -90,130 +139,195 @@ def create_dataloaders(config):
         pin_memory=config['training']['pin_memory']
     )
 
-    # Validation set (opzionale)
-    val_loader = None
-    val_ann = config.get('paths.val_annotations')
-    if val_ann and Path(val_ann).exists():
-        val_dataset = DOLOSFrameDataset(
-            root_dir=frames_dir,
-            annotation_file=val_ann,
-            max_frames=config.get('preprocessing.max_frames'),
-            use_behavioral_features=config.get('dataset.use_behavioral_features')
-        )
-        val_loader = DataLoader(
-            val_dataset,
-            batch_size=batch_size,
-            shuffle=False,
-            collate_fn=collate_fn_with_padding,
-            num_workers=config['training']['num_workers'],
-            pin_memory=config['training']['pin_memory']
-        )
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        collate_fn=collate_fn_with_padding,
+        num_workers=config['training']['num_workers'],
+        pin_memory=config['training']['pin_memory']
+    )
+
+    test_loader = DataLoader(
+        test_dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        collate_fn=collate_fn_with_padding,
+        num_workers=config['training']['num_workers'],
+        pin_memory=config['training']['pin_memory']
+    )
 
     print(f"\n✓ Dataset caricati:")
     print(f"  Train: {len(train_dataset)} clips")
-    if val_loader:
-        print(f"  Validation: {len(val_dataset)} clips")
+    print(f"  Val:   {len(val_dataset)} clips")
+    print(f"  Test:  {len(test_dataset)} clips")
 
-    return train_loader, val_loader
+    return train_loader, val_loader, test_loader
 
 
-def build_model(config):
+def test_with_real_batch(config, use_subject_split=False):
     """
-    Costruisci modello (ResNet feature extractor per ora).
-    TODO: Aggiungere TCN + Attention + MLP dopo.
+    Test con un batch reale dal dataset.
+    Verifica che tutto funzioni prima del training completo.
     """
-    print("\n" + "=" * 70)
-    print("COSTRUZIONE MODELLO")
-    print("=" * 70)
+    print("\n" + "="*70)
+    print("TEST CON BATCH REALE")
+    print("="*70)
 
-    from torchvision.models import resnet34, resnet50, ResNet34_Weights, ResNet50_Weights
+    # Crea dataloader
+    train_loader, _, _ = create_dataloaders(config, use_subject_split)
 
-    resnet_arch = config.get('model.resnet.architecture')
-    pretrained = config.get('model.resnet.pretrained')
+    # Build model
+    from src.model import build_model
+    model, device = build_model(config)
 
-    if resnet_arch == 'resnet34':
-        weights = ResNet34_Weights.DEFAULT if pretrained else None
-        resnet = resnet34(weights=weights)
-        feature_dim = 512
-    else:
-        weights = ResNet50_Weights.DEFAULT if pretrained else None
-        resnet = resnet50(weights=weights)
-        feature_dim = 2048
+    print("\nCaricamento primo batch...")
+    frames, labels, lengths, mask, metadata = next(iter(train_loader))
 
-    # Rimuovi layer finale
-    resnet.fc = torch.nn.Identity()
+    print(f"\nBatch info:")
+    print(f"  Frames shape: {frames.shape}")
+    print(f"  Labels: {labels}")
+    print(f"  Lengths: {lengths}")
+    print(f"  Clip names: {metadata['clip_names']}")
 
-    # Freeze se richiesto
-    if config.get('model.resnet.freeze_layers'):
-        for param in resnet.parameters():
-            param.requires_grad = False
+    # Forward pass
+    print("\nForward pass...")
+    frames = frames.to(device)
+    mask = mask.to(device)
 
-    device = torch.device(config['training']['device'])
-    resnet = resnet.to(device)
-
-    trainable = sum(p.numel() for p in resnet.parameters() if p.requires_grad)
-    total = sum(p.numel() for p in resnet.parameters())
-
-    print(f"\n✓ Modello: {resnet_arch}")
-    print(f"  Feature dim: {feature_dim}")
-    print(f"  Parametri totali: {total:,}")
-    print(f"  Parametri trainable: {trainable:,}")
-    print(f"  Device: {device}")
-
-    return resnet
-
-
-def train(config, model, train_loader, val_loader=None):
-    """
-    Training loop.
-    TODO: Implementare loop completo dopo aver creato TCN+Attention.
-    Per ora solo test forward pass.
-    """
-    print("\n" + "=" * 70)
-    print("TRAINING")
-    print("=" * 70)
-
-    device = torch.device(config['training']['device'])
-    num_epochs = config['training']['num_epochs']
-
-    print(f"\nConfigurazione training:")
-    print(f"  Epochs: {num_epochs}")
-    print(f"  Batch size: {config['training']['batch_size']}")
-    print(f"  Learning rate: {config['training']['learning_rate']}")
-    print(f"  Optimizer: {config['training']['optimizer']}")
-
-    # Test forward pass
-    print("\nTest forward pass...")
     model.eval()
     with torch.no_grad():
-        frames, labels, lengths, mask, metadata = next(iter(train_loader))
-        frames = frames.to(device)
+        logits, attention_weights = model(frames, mask)
 
-        batch_size, max_len, C, H, W = frames.shape
-        frames_flat = frames.view(batch_size * max_len, C, H, W)
+    print(f"\nOutput:")
+    print(f"  Logits shape: {logits.shape}")
+    print(f"  Attention weights shape: {attention_weights.shape}")
 
-        features = model(frames_flat)
-        features = features.view(batch_size, max_len, -1)
+    # Predictions
+    predictions = torch.argmax(logits, dim=1)
+    probabilities = torch.softmax(logits, dim=1)
 
-        print(f"\n✓ Forward pass OK!")
-        print(f"  Input: {frames.shape}")
-        print(f"  Output: {features.shape}")
-        print(f"  Labels: {labels}")
+    print(f"\nPredictions:")
+    for i in range(len(predictions)):
+        pred_class = 'Truth' if predictions[i] == 0 else 'Deception'
+        true_class = 'Truth' if labels[i] == 0 else 'Deception'
+        conf = probabilities[i, predictions[i]].item()
 
-    print("\n⚠ Training loop completo da implementare dopo TCN+Attention")
+        print(f"  {metadata['clip_names'][i]}:")
+        print(f"    True: {true_class}, Predicted: {pred_class}, Confidence: {conf:.3f}")
 
-    return model
+    print(f"\n✓ Test con batch reale completato!")
+    print(f"  Il modello è pronto per training completo")
 
 
-def test(config, model):
+def demo_mode(config):
     """
-    Test finale.
-    TODO: Implementare dopo training.
+    Modalità demo: mini-training su subset piccolo per test rapido.
+    Utile per verificare che tutto funzioni prima del training completo.
     """
-    print("\n" + "=" * 70)
+    print("\n" + "="*70)
+    print("DEMO MODE: Mini-training su subset ridotto")
+    print("="*70)
+
+    # Override config per demo veloce
+    original_epochs = config['training']['num_epochs']
+    config.update({
+        'training': {
+            'num_epochs': 3,
+            'batch_size': 2
+        }
+    })
+
+    print(f"\nConfigurazione demo:")
+    print(f"  Epochs: 3 (original: {original_epochs})")
+    print(f"  Batch size: 2")
+    print(f"  Device: {config['training']['device']}")
+    print(f"  Split: Random (veloce)")
+
+    # Crea dataloaders con RANDOM split (più veloce per demo)
+    train_loader, val_loader, test_loader = create_dataloaders(config, use_subject_split=False)
+
+    # Limita a pochi batch per demo
+    print(f"\n⚠️  Demo mode: usando solo 20 samples train, 6 val")
+
+    from torch.utils.data import Subset
+    import numpy as np
+
+    # Prendi solo primi N samples
+    train_indices = np.arange(min(20, len(train_loader.dataset)))
+    val_indices = np.arange(min(6, len(val_loader.dataset)))
+
+    train_subset = Subset(train_loader.dataset, train_indices)
+    train_loader = DataLoader(
+        train_subset,
+        batch_size=2,
+        shuffle=True,
+        collate_fn=collate_fn_with_padding
+    )
+
+    val_subset = Subset(val_loader.dataset, val_indices)
+    val_loader = DataLoader(
+        val_subset,
+        batch_size=2,
+        shuffle=False,
+        collate_fn=collate_fn_with_padding
+    )
+
+    # Training
+    trainer = train_model(config, train_loader, val_loader)
+
+    print(f"\n✓ Demo completato!")
+    print(f"  Se tutto è OK, esegui training completo con --mode train")
+
+
+def train(config, use_subject_split=False):
+    """
+    Training completo del modello.
+
+    Args:
+        config: Config object
+        use_subject_split: Se True, usa subject-independent split
+    """
+    print("\n" + "="*70)
+    print("TRAINING COMPLETO")
+    print("="*70)
+
+    # Crea dataloaders
+    train_loader, val_loader, test_loader = create_dataloaders(config, use_subject_split)
+
+    # Training
+    trainer = train_model(config, train_loader, val_loader)
+
+    # Salva modello finale
+    final_model_path = Path(config.get('paths.models_dir')) / 'final_model.pth'
+    torch.save({
+        'model_state_dict': trainer.model.state_dict(),
+        'config': config.to_dict(),
+        'best_val_f1': trainer.best_val_f1
+    }, final_model_path)
+
+    print(f"\n✓ Modello finale salvato: {final_model_path}")
+
+    return trainer
+
+
+def test(config):
+    """
+    Test finale con best model.
+    """
+    print("\n" + "="*70)
     print("TESTING")
-    print("=" * 70)
-    print("⚠ Da implementare")
+    print("="*70)
+
+    # TODO: Implementare test completo
+    # - Carica best_model.pth
+    # - Carica test set
+    # - Inference
+    # - Calcola metriche finali
+    # - Genera grafici
+
+    print("⚠️  Test mode da implementare")
+    print("   Per ora usa validation metrics dal training")
 
 
 def main():
@@ -240,11 +354,33 @@ def main():
     if args.mode == 'preprocess':
         preprocess(config)
 
-    elif args.mode == 'train':
-        train_loader, val_loader = create_dataloaders(config)
-        model = build_model(config)
-        model = train(config, model, train_loader, val_loader)
+    elif args.mode == 'demo':
+        demo_mode(config)
 
-        # Salva checkpoint
-        checkpoint_dir = Path(config.get('paths.models_dir'))
-        checkpoint_path = checkpoint_dir / 'resnet_features.pth'
+    elif args.mode == 'train':
+        # Determina se usare subject split
+        use_subject_split = args.subject_split
+
+        if use_subject_split:
+            print("\n🎓 Training con SUBJECT-INDEPENDENT SPLIT")
+            print("   (Corretto per paper/tesi)")
+        else:
+            print("\n⚡ Training con RANDOM SPLIT")
+            print("   (Veloce per test, ma NON per paper/tesi)")
+
+        # Prima testa con batch reale
+        test_with_real_batch(config, use_subject_split)
+
+        # Poi training completo
+        train(config, use_subject_split)
+
+    elif args.mode == 'test':
+        test(config)
+
+    print("\n" + "="*70)
+    print("✓ COMPLETATO")
+    print("="*70)
+
+
+if __name__ == "__main__":
+    main()
