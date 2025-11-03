@@ -13,7 +13,7 @@ paths:
   train_annotations: "data/metadata/train_dolos.xlsx"
 
   # OUTPUT: Dove salvare i checkpoint del modello durante training
-  models_dir: "src/models/checkpoints"
+  models_dir: "models/checkpoints"
 
   # OUTPUT: Log per TensorBoard e file di log testuale
   logs_dir: "logs"
@@ -77,6 +77,9 @@ dataset:
   # - true: Carica anche feature MUMIN dall'excel (per fusion futura con OpenFace)
   use_behavioral_features: false
 
+  # Split type
+  fold_idx: 1  # Per subject-independent (1, 2, o 3)
+
   # DATA AUGMENTATION
   augmentation:
     enabled: true  # Attiva/disattiva tutto
@@ -114,8 +117,7 @@ model:
 
     # FREEZE_LAYERS: Congela ResNet (non aggiorna i suoi pesi)
     # - true: ResNet usato solo come feature extractor → PIÙ VELOCE, ottimo per iniziare
-    # - false: Fine-tuning (aggiorna anche ResNet) → più lento, migliori risultati
-    # WORKFLOW: Inizia con true, se hai tempo prova false alla fine
+    # - false: Fine-tuning (aggiorna anche ResNet) → più lento, migliori risultati. Da fare alla fine
     freeze_layers: true
 
     # UNFREEZE_FROM: Se freeze_layers=false, da quale layer fare fine-tuning
@@ -128,7 +130,7 @@ model:
   tcn:
     # NUM_LAYERS: Profondità della TCN -> più layer indica che che la tcn cattura dipendenze temporali più lunghe
     # - 2-3 layer: Buon compromesso per clip brevi
-    num_layers: 2
+    num_layers: 3
 
     # KERNEL_SIZE: Finestra temporale che ogni layer analizza, ovvero numero di frame "guardati" insieme. Più il numero è alto e più è ampio il campo recettivo
     # - 3: 3 frame alla volta
@@ -141,7 +143,8 @@ model:
 
     # HIDDEN_CHANNELS: Numero di canali (feature) per ogni layer. Più canali migliorano la capacità ma rendono il modello più lento
     # - [128, 128]: 2 layer con 128 canali ciascuno
-    hidden_channels: [128, 128]
+    # - [256, 256, 256]: 3 layer con 256 canali ciascuno
+    hidden_channels: [256, 256, 256]
 
   # ATTENTION: Attention pooling (decide quali frame sono importanti)
   attention:
@@ -151,7 +154,7 @@ model:
     type: "temporal"
 
     # HIDDEN_DIM: Dimensione layer interno attention
-    hidden_dim: 64
+    hidden_dim: 128
 
     # NUM_HEADS: Per multi-head attention (se usi self-attention)
     # - 1: Single-head (più semplice)
@@ -162,7 +165,8 @@ model:
   classifier:
     # HIDDEN_DIMS: Layer nascosti dell'MLP. Più layer migliorano la capacità ma aumenta il rischio di overfitting
     # - [64]: Un layer da 64 neuroni
-    hidden_dims: [64]
+     # - [128, 64]: Un layer da [128, 64] neuroni
+    hidden_dims: [128, 64]
 
     # DROPOUT: Dropout nell'MLP
     dropout: 0.3
@@ -173,15 +177,15 @@ model:
 
 
 # -------------------- TRAINING --------------------
-# Iperparametri per il training
+# Iperparametri per il training - configurazione pensata per training su COLAB pro
 training:
   # BATCH_SIZE: Quanti video processare contemporaneamente
   # - 8: Buon compromesso per GPU con 8-12GB VRAM
   # - 2: Adatto alla GPU del PC personale
-  batch_size: 2
+  batch_size: 8
 
   # NUM_EPOCHS: Quante volte il modello vede tutto il training set
-  num_epochs: 5
+  num_epochs: 20
 
   # LEARNING_RATE: Quanto "velocemente" il modello impara
   # - 0.001: Standard per Adam optimizer
@@ -206,7 +210,7 @@ training:
     # - 'cosine': Riduzione smooth (coseno)
     # - 'plateau': Riduci quando validation non migliora
     # - null: Nessuno scheduler (LR fisso)
-    type: "step"
+    type: "cosine"
 
     # STEP_SIZE: Ogni quante epoch ridurre LR (solo per 'step')
     step_size: 10
@@ -217,6 +221,9 @@ training:
 
     # PATIENCE: Epoch di attesa prima di ridurre (solo per 'plateau')
     patience: 5
+
+    # T_max: num epochs
+    T_max: 20
 
   # LOSS: Funzione di loss
   loss:
@@ -232,7 +239,7 @@ training:
     enabled: true  # Attiva/disattiva
 
     # PATIENCE: Quante epoch aspettare senza miglioramento prima di fermare
-    patience: 10
+    patience: 8
 
     # MIN_DELTA: Miglioramento minimo considerato "vero miglioramento"
     # - 0.001: Deve migliorare di almeno 0.1% per contare
@@ -250,7 +257,7 @@ training:
 
   # NUM_WORKERS: Thread paralleli per caricare
   # - 0: Disabilita parallelismo (più lento ma debug più facile)
-  num_workers: 2
+  num_workers: 4
 
   # PIN_MEMORY: Ottimizzazione per trasferimento CPU→GPU
   # - true: Più veloce se usi GPU
@@ -320,18 +327,18 @@ logging:
     enabled: false  # Attiva solo se hai account wandb
     project: "deception-detection"
     entity: null  # Tuo username wandb
-    name: "experiment_1"
+    name: "colab_pro_run_1"
 
   # TENSORBOARD: Visualizzazione locale
   tensorboard:
     enabled: true  # visualizza con: tensorboard --logdir logs/tensorboard
-    log_dir: "experiments/tensorboard"
+    log_dir: "logs/tensorboard"
 
   # CONSOLE: Output su terminale
   print_every: 10  # Stampa loss ogni 10 batch
 
   # LOG FILE: File testuale con tutto l'output
-  log_file: "experiments/training.log"
+  log_file: "logs/training.log"
 
 
 # REPRODUCIBILITY
@@ -342,13 +349,13 @@ reproducibility:
   # DETERMINISTIC: Forza algoritmi deterministici
   # - true: Stesso risultato ogni run (ma più lento ~10-20%)
   # - false: Più veloce ma risultati leggermente diversi ogni run
-  deterministic: true
+  deterministic: false
 
   # BENCHMARK: CuDNN benchmark (ottimizzazione GPU)
   # - true: Più veloce ma non deterministico
   # - false: Deterministico
   # NOTA: Se deterministic=true, questo viene ignorato
-  benchmark: false
+  benchmark: true
 
 
 # -------------------- EXPERIMENTAL --------------------
@@ -358,7 +365,7 @@ experimental:
   openface:
     enabled: false  # true quando implementi OpenFace
     features: ["AUs", "gaze", "pose"]
-    fusion_method: "concat"  # Come combinare con feature video
+    fusion_method: "concat"  # Come combinare con feature video - o 'attention'
 
   # CLASS_BALANCING: Gestione classi sbilanciate
   class_balancing:
