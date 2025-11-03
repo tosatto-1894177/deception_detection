@@ -171,8 +171,7 @@ class DOLOSFrameDataset(Dataset):
         # 🔥 SAMPLING DINAMICO se troppo lunghi
         sampled_files = self._sample_frames(
             frame_files,
-            self.max_frames,
-            self.sampling_strategy
+            self.max_frames
         )
 
         # Carica frame campionati
