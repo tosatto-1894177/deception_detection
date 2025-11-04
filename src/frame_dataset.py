@@ -14,7 +14,7 @@ import numpy as np
 class DOLOSFrameDataset(Dataset):
     """
     Dataset per DOLOS con annotazioni MUMIN.
-    Supporta sia random split che subject-independent split con fold DOLOS, nonché un numero variabile di frame:
+    Supporta sia random split che subject-independent split, nonché un numero variabile di frame:
      - Sampling dinamico nel __getitem__
     - Gestisce clip da 10 a 6000+ frames
     - Sampling intelligente per mantenere informazione temporale
@@ -430,6 +430,104 @@ def create_random_split(frames_dir, annotation_file,
     print(f"  Train: {len(train_dataset)} clip")
     print(f"  Val:   {len(val_dataset)} clip")
     print(f"  Test:  {len(test_dataset)} clip")
+    print("=" * 70 + "\n")
+
+    return train_dataset, val_dataset, test_dataset
+
+# In frame_dataset.py, DOPO create_subject_independent_split
+
+def create_dolos_fold_split(frames_dir, annotation_file,
+                            train_fold_path, test_fold_path,
+                            val_ratio=0.2, seed=42, max_frames=50):
+    """
+    Usa fold DOLOS ufficiali SENZA subject-independent split.
+
+    Split train fold → train/val con RANDOM (non per soggetto).
+    Accetta overlap soggetti tra fold (come DOLOS originale).
+
+    Args:
+        frames_dir: Directory frame
+        annotation_file: Annotazioni
+        train_fold_path: CSV train fold DOLOS
+        test_fold_path: CSV test fold DOLOS
+        val_ratio: % di train da usare per validation
+        seed: Random seed
+        max_frames: Max frame per clip
+
+    Returns:
+        (train_dataset, val_dataset, test_dataset)
+    """
+    np.random.seed(seed)
+
+    print("\n" + "=" * 70)
+    print("📁 USING DOLOS OFFICIAL FOLDS (Not Subject-Independent)")
+    print("=" * 70)
+
+    # Carica fold DOLOS
+    train_clips = load_dolos_fold(train_fold_path)
+    test_clips = load_dolos_fold(test_fold_path)
+
+    print(f"\nDOLOS fold originali:")
+    print(f"  Train fold: {len(train_clips)} clip")
+    print(f"  Test fold:  {len(test_clips)} clip")
+
+    # Crea dataset completo
+    full_dataset = DOLOSFrameDataset(
+        root_dir=frames_dir,
+        annotation_file=annotation_file,
+        clip_filter=None,
+        max_frames=max_frames
+    )
+
+    available_clips = set(s['clip_name'] for s in full_dataset.samples)
+
+    # Filtra clip disponibili
+    train_clips_available = [c for c in train_clips if c in available_clips]
+    test_clips_available = [c for c in test_clips if c in available_clips]
+
+    print(f"\nClip disponibili:")
+    print(f"  Train: {len(train_clips_available)}/{len(train_clips)}")
+    print(f"  Test:  {len(test_clips_available)}/{len(test_clips)}")
+
+    # Split train → train/val con RANDOM (NON per soggetto!)
+    n_train = len(train_clips_available)
+    n_val = int(n_train * val_ratio)
+
+    # Shuffle e split
+    shuffled = train_clips_available.copy()
+    np.random.shuffle(shuffled)
+
+    train_final = shuffled[n_val:]
+    val_final = shuffled[:n_val]
+
+    print(f"\nRandom split del train fold:")
+    print(f"  Train: {len(train_final)} clip ({(1 - val_ratio) * 100:.0f}%)")
+    print(f"  Val:   {len(val_final)} clip ({val_ratio * 100:.0f}%)")
+    print(f"  Test:  {len(test_clips_available)} clip (fold DOLOS)")
+
+    # Crea dataset con filtri
+    train_dataset = DOLOSFrameDataset(
+        root_dir=frames_dir,
+        annotation_file=annotation_file,
+        clip_filter=set(train_final),
+        max_frames=max_frames
+    )
+
+    val_dataset = DOLOSFrameDataset(
+        root_dir=frames_dir,
+        annotation_file=annotation_file,
+        clip_filter=set(val_final),
+        max_frames=max_frames
+    )
+
+    test_dataset = DOLOSFrameDataset(
+        root_dir=frames_dir,
+        annotation_file=annotation_file,
+        clip_filter=set(test_clips_available),
+        max_frames=max_frames
+    )
+
+    print(f"\n✅ DOLOS fold split creato!")
     print("=" * 70 + "\n")
 
     return train_dataset, val_dataset, test_dataset
