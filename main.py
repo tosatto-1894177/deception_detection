@@ -39,7 +39,11 @@ def parse_args():
 
     # Split type
     parser.add_argument('--subject_split', action='store_true',
-                        help='Usa subject-independent split (RACCOMANDATO per training finale)')
+                        help='Usa subject-independent split custom (per training finale)')
+
+    # DOLOS type
+    parser.add_argument('--dolos_fold', action='store_true',
+                        help='Usa fold DOLOS ufficiali (comparabile letteratura)')
 
     return parser.parse_args()
 
@@ -77,14 +81,15 @@ def preprocess(config):
     print(f"  Frame salvati in: {frames_dir}")
 
 
-def create_dataloaders(config, use_subject_split=False):
+def create_dataloaders(config, use_subject_split=False, use_dolos_fold=False):
     """
     Crea DataLoader per train/val/test.
 
     Args:
         config: Config object
-        use_subject_split: Se True, usa subject-independent split con fold DOLOS
-                          Se False, usa random split (più veloce per test)
+        use_subject_split: Se True, usa subject-independent split custom
+        use_dolos_fold: Se True, usa fold DOLOS ufficiali (non subject-independent)
+        Se entrambi False, usa random split (più veloce per test)
     """
     print("\n" + "="*70)
     print("CARICAMENTO DATASET")
@@ -94,7 +99,28 @@ def create_dataloaders(config, use_subject_split=False):
     batch_size = config['training']['batch_size']
     annotation_file = config.get('paths.train_annotations')
 
-    if use_subject_split:
+    if use_dolos_fold:
+        # ✅ NUOVO: Usa fold DOLOS ufficiali (comparabile con letteratura)
+        print("\n📁 Usando FOLD DOLOS UFFICIALI")
+        print("   ⚠️  NON subject-independent (overlap soggetti)")
+
+        from src.frame_dataset import create_dolos_fold_split
+
+        fold_idx = config.get('dataset.fold_idx', 1)
+        train_fold_path = Path(f'data/splits/train_fold{fold_idx}.csv')
+        test_fold_path = Path(f'data/splits/test_fold{fold_idx}.csv')
+
+        train_dataset, val_dataset, test_dataset = create_dolos_fold_split(
+            frames_dir=frames_dir,
+            annotation_file=annotation_file,
+            train_fold_path=train_fold_path,
+            test_fold_path=test_fold_path,
+            val_ratio=config.get('dataset.val_ratio', 0.2),
+            seed=config.get('dataset.seed', 42),
+            max_frames=50
+        )
+
+    elif use_subject_split:
         # Subject-Independent Split (RACCOMANDATO per training finale)
         print("\n🎓 Usando SUBJECT-INDEPENDENT SPLIT")
 
@@ -175,7 +201,7 @@ def test_with_real_batch(config, use_subject_split=False):
     print("="*70)
 
     # Crea dataloader
-    train_loader, _, _ = create_dataloaders(config, use_subject_split)
+    train_loader, _, _ = create_dataloaders(config)
 
     # Build model
     from src.model import build_model
@@ -280,20 +306,21 @@ def demo_mode(config):
     print(f"  Se tutto è OK, esegui training completo con --mode train")
 
 
-def train(config, use_subject_split=False):
+def train(config, use_subject_split=False, use_dolos_fold=False):
     """
     Training completo del modello.
 
     Args:
         config: Config object
-        use_subject_split: Se True, usa subject-independent split
+        use_subject_split: Se True, usa subject-independent split custom
+        use_dolos_fold: se True, usa dolos split ufficiale
     """
     print("\n" + "="*70)
     print("TRAINING COMPLETO")
     print("="*70)
 
     # Crea dataloaders
-    train_loader, val_loader, test_loader = create_dataloaders(config, use_subject_split)
+    train_loader, val_loader, test_loader = create_dataloaders(config, use_subject_split, use_dolos_fold)
 
     # Training
     trainer = train_model(config, train_loader, val_loader)
@@ -358,21 +385,12 @@ def main():
         demo_mode(config)
 
     elif args.mode == 'train':
-        # Determina se usare subject split
-        use_subject_split = args.subject_split
-
-        if use_subject_split:
-            print("\n🎓 Training con SUBJECT-INDEPENDENT SPLIT")
-            print("   (Corretto per paper/tesi)")
-        else:
-            print("\n⚡ Training con RANDOM SPLIT")
-            print("   (Veloce per test, ma NON per paper/tesi)")
 
         # Prima testa con batch reale
-        test_with_real_batch(config, use_subject_split)
+        test_with_real_batch(config)
 
         # Poi training completo
-        train(config, use_subject_split)
+        train(config, args.subject_split, args.dolos_fold)
 
     elif args.mode == 'test':
         test(config)
