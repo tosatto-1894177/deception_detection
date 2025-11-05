@@ -426,7 +426,7 @@ def test(config, use_dolos_fold=False):
     device = torch.device(config['training']['device'])
     model, _ = build_model(config)
 
-    checkpoint = torch.load(best_model_path, map_location=device)
+    checkpoint = torch.load(best_model_path, map_location=device, weights_only=False)
     model.load_state_dict(checkpoint['model_state_dict'])
     model.eval()
 
