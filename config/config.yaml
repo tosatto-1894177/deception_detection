@@ -257,7 +257,7 @@ training:
 
   # NUM_WORKERS: Thread paralleli per caricare
   # - 0: Disabilita parallelismo (più lento ma debug più facile)
-  num_workers: 4
+  num_workers: 2
 
   # PIN_MEMORY: Ottimizzazione per trasferimento CPU→GPU
   # - true: Più veloce se usi GPU
