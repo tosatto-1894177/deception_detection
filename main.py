@@ -197,7 +197,7 @@ def create_dataloaders(config, use_subject_split=False, use_dolos_fold=False):
     return train_loader, val_loader, test_loader
 
 
-def test_with_real_batch(config, use_subject_split=False):
+def test_with_real_batch(config, use_subject_split=False, use_dolos_fold=False):
     """
     Test con un batch reale dal dataset.
     Verifica che tutto funzioni prima del training completo.
@@ -207,7 +207,7 @@ def test_with_real_batch(config, use_subject_split=False):
     print("="*70)
 
     # Crea dataloader
-    train_loader, _, _ = create_dataloaders(config)
+    train_loader, _, _ = create_dataloaders(config, use_subject_split, use_dolos_fold)
 
     # Build model
     model, device = build_model(config)
@@ -587,7 +587,7 @@ def main():
     elif args.mode == 'train':
 
         # Prima testa con batch reale
-        test_with_real_batch(config)
+        test_with_real_batch(config, args.subject_split, args.dolos_fold)
 
         # Poi training completo
         train(config, args.subject_split, args.dolos_fold)
