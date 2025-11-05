@@ -125,12 +125,13 @@ class MetricsTracker:
                 metrics['roc_auc'] = auc(fpr, tpr)
                 metrics['roc_curve'] = {'fpr': fpr.tolist(), 'tpr': tpr.tolist()}
 
-        # Salva in history
-        self.history[phase]['loss'].append(metrics['loss'])
-        self.history[phase]['accuracy'].append(metrics['accuracy'])
-        self.history[phase]['f1'].append(metrics['f1'])
-        self.history[phase]['precision'].append(metrics['precision'])
-        self.history[phase]['recall'].append(metrics['recall'])
+        # Salva in history se train o val
+        if phase in self.history:
+            self.history[phase]['loss'].append(metrics['loss'])
+            self.history[phase]['accuracy'].append(metrics['accuracy'])
+            self.history[phase]['f1'].append(metrics['f1'])
+            self.history[phase]['precision'].append(metrics['precision'])
+            self.history[phase]['recall'].append(metrics['recall'])
 
         # Aggiorna best metrics (solo per validation)
         if phase == 'val':
