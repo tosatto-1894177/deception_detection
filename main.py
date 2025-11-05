@@ -10,8 +10,16 @@ from torch.utils.data import DataLoader
 
 from src.config_loader import load_config
 from scripts.frame_extractor import process_dolos_with_faces
-from src.frame_dataset import DOLOSFrameDataset, collate_fn_with_padding
+from src.frame_dataset import DOLOSFrameDataset, collate_fn_with_padding, load_dolos_fold
 from src.train import train_model
+from datetime import datetime
+from src.model import build_model
+from torch.utils.data import Subset
+import numpy as np
+from src.metrics import MetricsTracker, MetricsVisualizer
+from tqdm import tqdm
+from src.frame_dataset import create_random_split
+import json
 
 # Ottimizzazioni memoria GPU
 torch.backends.cudnn.benchmark = True
@@ -144,8 +152,6 @@ def create_dataloaders(config, use_subject_split=False, use_dolos_fold=False):
         # Random Split (VELOCE per test/demo)
         print("\n⚡ Usando RANDOM SPLIT (veloce per test)")
 
-        from src.frame_dataset import create_random_split
-
         train_dataset, val_dataset, test_dataset = create_random_split(
             frames_dir=frames_dir,
             annotation_file=annotation_file,
@@ -204,7 +210,6 @@ def test_with_real_batch(config, use_subject_split=False):
     train_loader, _, _ = create_dataloaders(config)
 
     # Build model
-    from src.model import build_model
     model, device = build_model(config)
 
     print("\nCaricamento primo batch...")
@@ -275,9 +280,6 @@ def demo_mode(config):
 
     # Limita a pochi batch per demo
     print(f"\n⚠️  Demo mode: usando solo 20 samples train, 6 val")
-
-    from torch.utils.data import Subset
-    import numpy as np
 
     # Prendi solo primi N samples
     train_indices = np.arange(min(20, len(train_loader.dataset)))
@@ -350,13 +352,6 @@ def test(config, use_dolos_fold=False):
     print("🧪 TESTING - Valutazione Finale su Test Set")
     print("=" * 70)
 
-    from pathlib import Path
-    from src.model import build_model
-    from src.frame_dataset import DOLOSFrameDataset, collate_fn_with_padding, load_dolos_fold
-    from src.metrics import MetricsTracker, MetricsVisualizer
-    from torch.utils.data import DataLoader
-    import torch
-
     # 1. Verifica che esista best model
     best_model_path = Path(config.get('paths.models_dir')) / 'best_model.pth'
 
@@ -402,8 +397,6 @@ def test(config, use_dolos_fold=False):
             max_frames=max_frames
         )
     else:
-        # Random split test set (ricostruito con stesso seed)
-        from src.frame_dataset import create_random_split
 
         print(f"\n📊 Ricostruendo test set (random split)")
 
@@ -449,8 +442,6 @@ def test(config, use_dolos_fold=False):
 
     metrics_tracker.reset_epoch()
 
-    from tqdm import tqdm
-
     with torch.no_grad():
         for frames, labels, lengths, mask, metadata in tqdm(test_loader, desc="Testing"):
             frames = frames.to(device)
@@ -489,18 +480,22 @@ def test(config, use_dolos_fold=False):
 
     print("=" * 70)
 
-    # 7. Classification report
-    print("\n")
-    metrics_tracker.generate_classification_report()
+    # Timestamp per organizzare i risultati
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-    # 8. Salva risultati
     results_dir = Path(config.get('paths.results_dir'))
     test_results_dir = results_dir / 'test_results'
     test_results_dir.mkdir(parents=True, exist_ok=True)
+    test_results_subdir = test_results_dir / f"run_{timestamp}"
+    test_results_subdir.mkdir(parents=True, exist_ok=True)
+
+    # 7. Classification report
+    print("\n")
+    metrics_tracker.generate_classification_report(save_dir=test_results_subdir)
+
+    # 8. Salva risultati
 
     # Salva metriche
-    import json
-    from datetime import datetime
 
     test_results = {
         'test_metrics': test_metrics,
