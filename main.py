@@ -10,8 +10,16 @@ from torch.utils.data import DataLoader
 
 from src.config_loader import load_config
 from scripts.frame_extractor import process_dolos_with_faces
-from src.frame_dataset import DOLOSFrameDataset, collate_fn_with_padding
+from src.frame_dataset import DOLOSFrameDataset, collate_fn_with_padding, load_dolos_fold
 from src.train import train_model
+from datetime import datetime
+from src.model import build_model
+from torch.utils.data import Subset
+import numpy as np
+from src.metrics import MetricsTracker, MetricsVisualizer
+from tqdm import tqdm
+from src.frame_dataset import create_random_split
+import json
 
 # Ottimizzazioni memoria GPU
 torch.backends.cudnn.benchmark = True
@@ -144,8 +152,6 @@ def create_dataloaders(config, use_subject_split=False, use_dolos_fold=False):
         # Random Split (VELOCE per test/demo)
         print("\n⚡ Usando RANDOM SPLIT (veloce per test)")
 
-        from src.frame_dataset import create_random_split
-
         train_dataset, val_dataset, test_dataset = create_random_split(
             frames_dir=frames_dir,
             annotation_file=annotation_file,
@@ -204,7 +210,6 @@ def test_with_real_batch(config, use_subject_split=False):
     train_loader, _, _ = create_dataloaders(config)
 
     # Build model
-    from src.model import build_model
     model, device = build_model(config)
 
     print("\nCaricamento primo batch...")
@@ -276,9 +281,6 @@ def demo_mode(config):
     # Limita a pochi batch per demo
     print(f"\n⚠️  Demo mode: usando solo 20 samples train, 6 val")
 
-    from torch.utils.data import Subset
-    import numpy as np
-
     # Prendi solo primi N samples
     train_indices = np.arange(min(20, len(train_loader.dataset)))
     val_indices = np.arange(min(6, len(val_loader.dataset)))
@@ -338,23 +340,221 @@ def train(config, use_subject_split=False, use_dolos_fold=False):
     return trainer
 
 
-def test(config):
+def test(config, use_dolos_fold=False):
     """
-    Test finale con best model.
+    Test finale con best model su test set.
+
+    Args:
+        config: Config object
+        use_dolos_fold: Se True, usa test fold DOLOS
     """
-    print("\n" + "="*70)
-    print("TESTING")
-    print("="*70)
+    print("\n" + "=" * 70)
+    print("🧪 TESTING - Valutazione Finale su Test Set")
+    print("=" * 70)
 
-    # TODO: Implementare test completo
-    # - Carica best_model.pth
-    # - Carica test set
-    # - Inference
-    # - Calcola metriche finali
-    # - Genera grafici
+    # 1. Verifica che esista best model
+    best_model_path = Path(config.get('paths.models_dir')) / 'best_model.pth'
 
-    print("⚠️  Test mode da implementare")
-    print("   Per ora usa validation metrics dal training")
+    if not best_model_path.exists():
+        print(f"❌ Best model non trovato: {best_model_path}")
+        print("   Esegui prima il training!")
+        return
+
+    print(f"\n📂 Caricando best model da: {best_model_path}")
+
+    # 2. Carica test set
+    frames_dir = config.get('paths.frames_dir')
+    annotation_file = config.get('paths.train_annotations')
+    max_frames = 50
+    sampling_strategy = config.get('preprocessing.sampling_strategy', 'uniform')
+
+    if use_dolos_fold:
+        # Test fold DOLOS
+        fold_idx = config.get('dataset.fold_idx', 1)
+        test_fold_path = Path(f'data/splits/test_fold{fold_idx}.csv')
+
+        print(f"\n📊 Caricando test fold DOLOS: {test_fold_path.name}")
+
+        test_clips = load_dolos_fold(test_fold_path)
+
+        # Filtra clip disponibili
+        full_dataset = DOLOSFrameDataset(
+            root_dir=frames_dir,
+            annotation_file=annotation_file,
+            clip_filter=None,
+            max_frames=max_frames
+        )
+
+        available_clips = set(s['clip_name'] for s in full_dataset.samples)
+        test_clips_available = [c for c in test_clips if c in available_clips]
+
+        print(f"   Clip disponibili: {len(test_clips_available)}/{len(test_clips)}")
+
+        test_dataset = DOLOSFrameDataset(
+            root_dir=frames_dir,
+            annotation_file=annotation_file,
+            clip_filter=set(test_clips_available),
+            max_frames=max_frames
+        )
+    else:
+
+        print(f"\n📊 Ricostruendo test set (random split)")
+
+        _, _, test_dataset = create_random_split(
+            frames_dir=frames_dir,
+            annotation_file=annotation_file,
+            train_ratio=config.get('dataset.train_ratio', 0.7),
+            val_ratio=config.get('dataset.val_ratio', 0.15),
+            test_ratio=config.get('dataset.test_ratio', 0.15),
+            seed=config.get('dataset.seed', 42),
+            max_frames=max_frames
+        )
+
+    # DataLoader
+    test_loader = DataLoader(
+        test_dataset,
+        batch_size=config.get('testing.batch_size', 16),
+        shuffle=False,
+        collate_fn=collate_fn_with_padding,
+        num_workers=config.get('training.num_workers', 2),
+        pin_memory=config.get('training.pin_memory', True)
+    )
+
+    print(f"✅ Test set caricato: {len(test_dataset)} clips")
+
+    # 3. Carica modello
+    device = torch.device(config['training']['device'])
+    model, _ = build_model(config)
+
+    checkpoint = torch.load(best_model_path, map_location=device)
+    model.load_state_dict(checkpoint['model_state_dict'])
+    model.eval()
+
+    print(f"✅ Best model caricato (epoch {checkpoint['epoch'] + 1})")
+
+    # 4. Inference su test set
+    print(f"\n🔬 Eseguendo inference su test set...")
+
+    metrics_tracker = MetricsTracker(
+        num_classes=config.get('model.classifier.num_classes', 2),
+        class_names=['Truth', 'Deception']
+    )
+
+    metrics_tracker.reset_epoch()
+
+    with torch.no_grad():
+        for frames, labels, lengths, mask, metadata in tqdm(test_loader, desc="Testing"):
+            frames = frames.to(device)
+            labels = labels.to(device)
+            mask = mask.to(device)
+
+            # Forward pass
+            logits, _ = model(frames, mask)
+
+            # Predictions
+            predictions = torch.argmax(logits, dim=1)
+            probabilities = torch.softmax(logits, dim=1)
+
+            # Update metrics
+            metrics_tracker.update(
+                predictions=predictions,
+                targets=labels,
+                loss=0.0,  # No loss calculation needed for test
+                probabilities=probabilities
+            )
+
+    # 5. Calcola metriche finali
+    test_metrics = metrics_tracker.compute_epoch_metrics('test')
+
+    # 6. Print risultati
+    print("\n" + "=" * 70)
+    print("📊 TEST SET RESULTS - FINAL PERFORMANCE")
+    print("=" * 70)
+    print(f"Accuracy:  {test_metrics['accuracy']:.4f}")
+    print(f"Precision: {test_metrics['precision']:.4f}")
+    print(f"Recall:    {test_metrics['recall']:.4f}")
+    print(f"F1 Score:  {test_metrics['f1']:.4f}")
+
+    if 'roc_auc' in test_metrics:
+        print(f"ROC-AUC:   {test_metrics['roc_auc']:.4f}")
+
+    print("=" * 70)
+
+    # Timestamp per organizzare i risultati
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    results_dir = Path(config.get('paths.results_dir'))
+    test_results_dir = results_dir / 'test_results'
+    test_results_dir.mkdir(parents=True, exist_ok=True)
+    test_results_subdir = test_results_dir / f"run_{timestamp}"
+    test_results_subdir.mkdir(parents=True, exist_ok=True)
+
+    # 7. Classification report
+    print("\n")
+    metrics_tracker.generate_classification_report(save_dir=test_results_subdir)
+
+    # 8. Salva risultati
+
+    # Salva metriche
+
+    test_results = {
+        'test_metrics': test_metrics,
+        'checkpoint_epoch': checkpoint['epoch'] + 1,
+        'num_test_samples': len(test_dataset),
+        'timestamp': datetime.now().isoformat()
+    }
+
+    with open(test_results_dir / 'test_results.json', 'w') as f:
+        json.dump(test_results, f, indent=2)
+
+    print(f"\n✅ Risultati salvati in: {test_results_dir}")
+
+    # 9. Genera grafici
+    visualizer = MetricsVisualizer()
+
+    # Confusion matrix
+    visualizer.plot_confusion_matrix(
+        test_metrics['confusion_matrix'],
+        class_names=['Truth', 'Deception'],
+        save_dir=test_results_dir,
+        normalize=False,
+        show=False
+    )
+
+    visualizer.plot_confusion_matrix(
+        test_metrics['confusion_matrix'],
+        class_names=['Truth', 'Deception'],
+        save_dir=test_results_dir,
+        normalize=True,
+        show=False
+    )
+
+    # ROC curve
+    if 'roc_curve' in test_metrics:
+        visualizer.plot_roc_curve(
+            test_metrics['roc_curve'],
+            save_dir=test_results_dir,
+            show=False
+        )
+
+    # Per-class metrics
+    visualizer.plot_per_class_metrics(
+        test_metrics['per_class'],
+        class_names=['Truth', 'Deception'],
+        save_dir=test_results_dir,
+        show=False
+    )
+
+    print(f"✅ Grafici salvati in: {test_results_dir}")
+
+    print("\n" + "=" * 70)
+    print("✅ TEST COMPLETATO!")
+    print("=" * 70)
+    print(f"🎯 Test F1: {test_metrics['f1']:.4f}")
+    print(f"📁 Risultati: {test_results_dir}")
+    print("=" * 70)
+
+    return test_metrics
 
 
 def main():
@@ -393,7 +593,7 @@ def main():
         train(config, args.subject_split, args.dolos_fold)
 
     elif args.mode == 'test':
-        test(config)
+        test(config, use_dolos_fold=args.dolos_fold)
 
     print("\n" + "="*70)
     print("✓ COMPLETATO")
