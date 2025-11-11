@@ -1,5 +1,5 @@
 """
-
+Creazione Dataset con split DOLOS o split subject-indipendent
 """
 
 import torch
@@ -11,11 +11,11 @@ import torchvision.transforms as transforms
 import numpy as np
 
 
-class DOLOSFrameDataset(Dataset):
+class DOLOSDataset(Dataset):
     """
-    Dataset per DOLOS con annotazioni MUMIN.
-    Supporta sia random split che subject-independent split, nonché un numero variabile di frame:
-     - Sampling dinamico nel __getitem__
+    Dataset DOLOS con annotazioni MUMIN.
+    Supporta 2 tipi di split e un numero variabile di frame:
+    - Sampling dinamico nel __getitem__
     - Gestisce clip da 10 a 6000+ frames
     - Sampling intelligente per mantenere informazione temporale
     """
@@ -24,12 +24,12 @@ class DOLOSFrameDataset(Dataset):
                  use_behavioral_features=False, clip_filter=None):
         """
         Args:
-            root_dir: Directory con frame estratti
-            annotation_file: Path CSV/Excel annotazioni
-            transform: Trasformazioni frame
-            max_frames: Numero massimo frame da caricare PER CLIP
+            root_dir: Cartella dove sono contenuti i frame estratti dalle clip
+            annotation_file: percorso dell'Excel che contiene le annotazioni MUMIN
+            transform: funzione transform
+            max_frames: Numero massimo di frame da caricare per ciascuna clip
             use_behavioral_features: Se True, carica feature comportamentali
-            clip_filter: Set clip_name da includere (per splits)
+            clip_filter: Insieme delle clip da includere (per splits)
         """
         self.root_dir = Path(root_dir)
         self.transform = transform or self.get_default_transform()
@@ -58,7 +58,7 @@ class DOLOSFrameDataset(Dataset):
                         self.samples.append({
                             'clip_dir': clip_dir,
                             'clip_name': clip_name,
-                            'num_frames': len(frames),  # ⚠️ Può essere 6000+!
+                            'num_frames': len(frames),
                             'label': label_info['label'],
                             'gender': label_info.get('gender', 'Unknown'),
                             'behavioral_features': label_info.get('features', None)
@@ -72,22 +72,17 @@ class DOLOSFrameDataset(Dataset):
         print(f"Frame per clip - min: {min(frame_counts)}, max: {max(frame_counts)}, "
               f"media: {np.mean(frame_counts):.1f}")
 
-        # ⚠️ WARNING se ci sono clip molto lunghe
-        if max(frame_counts) > 500:
-            print(f"\n⚠️  ATTENZIONE: {(np.array(frame_counts) > 500).sum()} clip "
-                  f"hanno >500 frames!")
-            print(f"   Ogni clip sarà ridotta a max {max_frames} frames\n")
-
         # Statistiche label
         truth_count = sum(1 for s in self.samples if s['label'] == 0)
         lie_count = sum(1 for s in self.samples if s['label'] == 1)
         print(f"Label distribution - Truth: {truth_count}, Deception: {lie_count}")
+        print(f"\n")
 
     def _load_annotations(self, annotation_file):
-        """Carica annotazioni MUMIN da Excel."""
+        """Carica annotazioni MUMIN da Excel"""
         ann_path = Path(annotation_file)
         if not ann_path.exists():
-            raise FileNotFoundError(f"Annotazioni non trovate: {annotation_file}")
+            raise FileNotFoundError(f"File con annotazioni MUMIN non trovato: {annotation_file}")
 
         # Leggi Excel
         df = pd.read_excel(ann_path, skiprows=2, engine='openpyxl')
@@ -100,6 +95,7 @@ class DOLOSFrameDataset(Dataset):
             label = 0 if label_str.lower() == 'truth' else 1
             gender = row['Participants gender'].strip() if 'Participants gender' in row else 'Unknown'
 
+            # Al momento use_behavioral_feature = False
             features = None
             if self.use_behavioral_features:
                 feature_cols = df.columns[3:]
@@ -115,14 +111,9 @@ class DOLOSFrameDataset(Dataset):
         return annotations
 
     def _get_label_from_annotations(self, clip_name):
-        """Cerca label per clip."""
+        """Cerca label per clip"""
         if clip_name in self.annotations:
             return self.annotations[clip_name]
-
-        # Match parziale
-        for ann_name, info in self.annotations.items():
-            if ann_name in clip_name or clip_name in ann_name:
-                return info
 
         return None
 
@@ -165,10 +156,10 @@ class DOLOSFrameDataset(Dataset):
         clip_dir = sample['clip_dir']
         label = sample['label']
 
-        # Carica TUTTI i frame disponibili
+        # Carica tutti i frame disponibili
         frame_files = sorted(clip_dir.glob("frame_*.jpg"))
 
-        # 🔥 SAMPLING DINAMICO se troppo lunghi
+        # Sampling dinamico se troppi frame
         sampled_files = self._sample_frames(
             frame_files,
             self.max_frames
@@ -203,24 +194,42 @@ class DOLOSFrameDataset(Dataset):
         }
 
 def collate_fn_with_padding(batch):
-    """Collate function con padding per sequenze variabili."""
+    """
+    Collate function con padding per sequenze variabili
+
+    Args:
+        batch: lista di dict, uno per ogni clip:
+        [{'frames': tensor(n, 3, 224, 224), 'label': 0/1, 'length': n, 'clip_name': 'NOME_EPX_lie/truth', 'gender': 'gender'},
+            ...]
+            dove n = numero di frame della clip
+    """
+
+    # Da lista di dict a liste separate per ciascun componente
     frames_list = [item['frames'] for item in batch]
     labels = [item['label'] for item in batch]
     lengths = [item['length'] for item in batch]
     clip_names = [item['clip_name'] for item in batch]
     genders = [item['gender'] for item in batch]
 
+    # Trova la lunghezza massima -> questa diventa la dimensione temporale del batch padded
+    # Tutte le clip più corte verranno "allungate" a max_len
     max_len = max(lengths)
     batch_size = len(frames_list)
     C, H, W = frames_list[0].shape[1:]
 
+    # Alloca tensor pieno di ZERI
     padded_frames = torch.zeros(batch_size, max_len, C, H, W)
+    # Alloca mask pieno di False
     mask = torch.zeros(batch_size, max_len, dtype=torch.bool)
 
+    # Per ogni clip nel batch
     for i, (frames, length) in enumerate(zip(frames_list, lengths)):
+        # Copia i frame della clip, il resto lascia zeri
         padded_frames[i, :length] = frames
+        # Segna nella mask quali posizioni hanno dati reali (se False -> padding)
         mask[i, :length] = True
 
+    # Converte labels e lenghts in tensor
     labels = torch.tensor(labels, dtype=torch.long)
     lengths = torch.tensor(lengths, dtype=torch.long)
 
@@ -233,64 +242,43 @@ def collate_fn_with_padding(batch):
 
 
 def load_dolos_fold(fold_path):
-    """Carica fold DOLOS."""
+    """Carica il CSV con fold DOLOS"""
     fold_path = Path(fold_path)
     if not fold_path.exists():
-        raise FileNotFoundError(f"Fold non trovato: {fold_path}")
+        raise FileNotFoundError(f"File CSV non trovato: {fold_path}")
 
-    df = pd.read_csv(fold_path)
+    # Legge il CSV composto da una riga così impostata: nome_clip,truth/deception,gender
+    df = pd.read_csv(fold_path, header=None, names=['clip_name', 'label', 'gender'])
 
-    if 'clip_name' in df.columns:
-        clip_names = df['clip_name'].tolist()
-    elif 'File name of the video clip' in df.columns:
-        clip_names = df['File name of the video clip'].tolist()
-    else:
-        clip_names = df.iloc[:, 0].tolist()
+    clip_names = df['clip_name'].str.strip().tolist()
 
-    clip_names = [str(name).strip() for name in clip_names]
-    print(f"✅ Fold {fold_path.name}: {len(clip_names)} clip")
     return clip_names
 
 
-def create_subject_independent_split(frames_dir, annotation_file,
-                                     train_fold_path, test_fold_path,
+"""def create_subject_independent_split(frames_dir, annotation_file,
                                      val_ratio=0.2, seed=42,
                                      max_frames=50):
-    """
-       Crea split subject-independent usando fold DOLOS + validation split.
-
-       Strategy:
-       1. Carica train fold DOLOS (subject-independent)
-       2. Carica test fold DOLOS (subject-independent)
-       3. Split train fold → 80% train, 20% validation (mantiene subject-independence)
+    """"""
+       Crea split subject-independent
 
        Args:
            frames_dir: Directory con frame estratti
            annotation_file: File annotazioni MUMIN
-           train_fold_path: Path al train fold DOLOS
-           test_fold_path: Path al test fold DOLOS
            val_ratio: % di train da usare per validation
            seed: Random seed
            max_frames: numero massimo frame
 
        Returns:
            tuple: (train_dataset, val_dataset, test_dataset)
-       """
+       """"""
     np.random.seed(seed)
 
     print("\n" + "=" * 70)
     print("CREATING SUBJECT-INDEPENDENT SPLIT")
     print("=" * 70)
 
-    train_clips = load_dolos_fold(train_fold_path)
-    test_clips = load_dolos_fold(test_fold_path)
-
-    print(f"\nDOLOS fold originali:")
-    print(f"  Train fold: {len(train_clips)} clip")
-    print(f"  Test fold:  {len(test_clips)} clip")
-
     # Crea dataset completo
-    full_dataset = DOLOSFrameDataset(
+    full_dataset = DOLOSDataset(
         root_dir=frames_dir,
         annotation_file=annotation_file,
         clip_filter=None,
@@ -343,21 +331,21 @@ def create_subject_independent_split(frames_dir, annotation_file,
     print(f"  Test:  {len(test_clips_available)} clip")
 
     # Crea dataset con filtri + sampling
-    train_dataset = DOLOSFrameDataset(
+    train_dataset = DOLOSDataset(
         root_dir=frames_dir,
         annotation_file=annotation_file,
         clip_filter=set(train_final),
         max_frames=max_frames
     )
 
-    val_dataset = DOLOSFrameDataset(
+    val_dataset = DOLOSDataset(
         root_dir=frames_dir,
         annotation_file=annotation_file,
         clip_filter=set(val_final),
         max_frames=max_frames
     )
 
-    test_dataset = DOLOSFrameDataset(
+    test_dataset = DOLOSDataset(
         root_dir=frames_dir,
         annotation_file=annotation_file,
         clip_filter=set(test_clips_available),
@@ -376,83 +364,24 @@ def create_subject_independent_split(frames_dir, annotation_file,
     print(f"\n✅ Subject-independent split creato!")
     print("=" * 70 + "\n")
 
-    return train_dataset, val_dataset, test_dataset
-
-
-def create_random_split(frames_dir, annotation_file,
-                        train_ratio=0.7, val_ratio=0.15, test_ratio=0.15,
-                        seed=42, max_frames=50):
-    """
-    Crea random split con sampling dinamico.
-
-    Args:
-        frames_dir: Directory con frame estratti
-        annotation_file: File annotazioni
-        train_ratio: Frazione per training
-        val_ratio: Frazione per validation
-        test_ratio: Frazione per test
-        seed: Random seed
-        max_frames: numero massimo di frame
-
-    Returns:
-        tuple: (train_dataset, val_dataset, test_dataset)
-    """
-    assert abs(train_ratio + val_ratio + test_ratio - 1.0) < 1e-6
-
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-
-    print("\n" + "=" * 70)
-    print("⚠️  CREATING RANDOM SPLIT (NOT SUBJECT-INDEPENDENT)")
-    print("=" * 70)
-
-    full_dataset = DOLOSFrameDataset(
-        root_dir=frames_dir,
-        annotation_file=annotation_file,
-        max_frames=max_frames
-    )
-
-    n_samples = len(full_dataset)
-    indices = np.random.permutation(n_samples)
-
-    train_end = int(train_ratio * n_samples)
-    val_end = train_end + int(val_ratio * n_samples)
-
-    train_indices = indices[:train_end]
-    val_indices = indices[train_end:val_end]
-    test_indices = indices[val_end:]
-
-    train_dataset = Subset(full_dataset, train_indices)
-    val_dataset = Subset(full_dataset, val_indices)
-    test_dataset = Subset(full_dataset, test_indices)
-
-    print(f"\nRandom split:")
-    print(f"  Train: {len(train_dataset)} clip")
-    print(f"  Val:   {len(val_dataset)} clip")
-    print(f"  Test:  {len(test_dataset)} clip")
-    print("=" * 70 + "\n")
-
-    return train_dataset, val_dataset, test_dataset
-
-# In frame_dataset.py, DOPO create_subject_independent_split
+    return train_dataset, val_dataset, test_dataset"""
 
 def create_dolos_fold_split(frames_dir, annotation_file,
                             train_fold_path, test_fold_path,
                             val_ratio=0.2, seed=42, max_frames=50):
     """
-    Usa fold DOLOS ufficiali SENZA subject-independent split.
+    Usa i fold DOLOS ufficiali - non supporta subject-independent split
 
-    Split train fold → train/val con RANDOM (non per soggetto).
-    Accetta overlap soggetti tra fold (come DOLOS originale).
+    Split del train fold tra train e val randomicamente
 
     Args:
-        frames_dir: Directory frame
-        annotation_file: Annotazioni
-        train_fold_path: CSV train fold DOLOS
-        test_fold_path: CSV test fold DOLOS
-        val_ratio: % di train da usare per validation
+        frames_dir: Cartella dove sono contenuti i frame estratti dalle clip
+        annotation_file: percorso dell'Excel che contiene le annotazioni MUMIN
+        train_fold_path: percorso al CSV che contiene il fold DOLOS per il train
+        test_fold_path: percorso al CSV che contiene il fold DOLOS per il test
+        val_ratio: % delle clip del fold train che verranno usate per validation
         seed: Random seed
-        max_frames: Max frame per clip
+        max_frames: Numero max di frame supportato per ciascuna clip
 
     Returns:
         (train_dataset, val_dataset, test_dataset)
@@ -460,26 +389,25 @@ def create_dolos_fold_split(frames_dir, annotation_file,
     np.random.seed(seed)
 
     print("\n" + "=" * 70)
-    print("📁 USING DOLOS OFFICIAL FOLDS (Not Subject-Independent)")
+    print("📁 Utilizzo i fold ufficiali DOLOS")
     print("=" * 70)
 
     # Carica fold DOLOS
     train_clips = load_dolos_fold(train_fold_path)
     test_clips = load_dolos_fold(test_fold_path)
 
-    print(f"\nDOLOS fold originali:")
     print(f"  Train fold: {len(train_clips)} clip")
     print(f"  Test fold:  {len(test_clips)} clip")
 
     # Crea dataset completo
-    full_dataset = DOLOSFrameDataset(
+    dataset = DOLOSDataset(
         root_dir=frames_dir,
         annotation_file=annotation_file,
         clip_filter=None,
         max_frames=max_frames
     )
 
-    available_clips = set(s['clip_name'] for s in full_dataset.samples)
+    available_clips = set(s['clip_name'] for s in dataset.samples)
 
     # Filtra clip disponibili
     train_clips_available = [c for c in train_clips if c in available_clips]
@@ -489,7 +417,7 @@ def create_dolos_fold_split(frames_dir, annotation_file,
     print(f"  Train: {len(train_clips_available)}/{len(train_clips)}")
     print(f"  Test:  {len(test_clips_available)}/{len(test_clips)}")
 
-    # Split train → train/val con RANDOM (NON per soggetto!)
+    # Split train → train/val
     n_train = len(train_clips_available)
     n_val = int(n_train * val_ratio)
 
@@ -500,34 +428,34 @@ def create_dolos_fold_split(frames_dir, annotation_file,
     train_final = shuffled[n_val:]
     val_final = shuffled[:n_val]
 
-    print(f"\nRandom split del train fold:")
-    print(f"  Train: {len(train_final)} clip ({(1 - val_ratio) * 100:.0f}%)")
-    print(f"  Val:   {len(val_final)} clip ({val_ratio * 100:.0f}%)")
-    print(f"  Test:  {len(test_clips_available)} clip (fold DOLOS)")
+    print(f"\nClip presenti in ciascun dataset:")
+    print(f"  Train: {len(train_final)} clip")
+    print(f"  Val:   {len(val_final)} clip")
+    print(f"  Test:  {len(test_clips_available)} clip")
 
     # Crea dataset con filtri
-    train_dataset = DOLOSFrameDataset(
+    train_dataset = DOLOSDataset(
         root_dir=frames_dir,
         annotation_file=annotation_file,
         clip_filter=set(train_final),
         max_frames=max_frames
     )
 
-    val_dataset = DOLOSFrameDataset(
+    val_dataset = DOLOSDataset(
         root_dir=frames_dir,
         annotation_file=annotation_file,
         clip_filter=set(val_final),
         max_frames=max_frames
     )
 
-    test_dataset = DOLOSFrameDataset(
+    test_dataset = DOLOSDataset(
         root_dir=frames_dir,
         annotation_file=annotation_file,
         clip_filter=set(test_clips_available),
         max_frames=max_frames
     )
 
-    print(f"\n✅ DOLOS fold split creato!")
+    print(f"\n✅ Creati Dataset con split DOLOS!")
     print("=" * 70 + "\n")
 
     return train_dataset, val_dataset, test_dataset

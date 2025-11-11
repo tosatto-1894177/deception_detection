@@ -2,15 +2,27 @@ Struttura del progetto:
 - configs:
   - file YAML
 - src 
-  - models -> modelli deep learning
-    - checkpoints -> checkpoint dei modelli salvati
-  - utils -> metriche, logging, seed, transforms
-  - ulteriori .py per train, eval
+  - __init__.py
+  - config_loader.py -> carica il config.yaml e le caratteristiche al suo interno
+  - dataset.py -> crea e carica il dataset per il modello
+  - metrics.py -> crea le metriche, ne gestisce l'accumulo durante il training e la visualizzazione. Inoltre genera i grafici dopo il test
+  - model.py -> costruisce il modello
+  - train.py -> addestra il modello
 - scripts -> script vari di utility
+  - check_frame_distribution.py -> analizza e plotta la distribuzione dei frame nelle clip di DOLOS
+  - frame_extractor.py -> estrae i frame con ritaglio del volto dalle clip tramite Haar
+  - Yt_videoDownloader.py -> scarica da Youtube i video del dataset Dolos, partizionandoli in clip secondo le info trovate in dolos_timestamps.csv
 - data
-  - raw_clips -> .mp4 scaricati da youtube e tagliati in clip secondo le info trovate in dolos_timestamps.csv
+  - raw_clips -> clips scaricate da Yt_videoDownloader.py
   - metadata -> .csv e .txt con il mapping dei soggetti e dei video 
-  - splits -> .csv per lo split del dataset
+  - splits -> .csv per gli split del dataset
   - openface -> un .csv per ciascuna clip con AUs, pose, gaze e landmarks
   - frames -> una cartella per ciascuna clip con dentro i frame della clip
-- experiments -> una cartella per ciascuna run con dentro tutte le metriche salvate
+- results 
+  - test_results -> contiene una cartella per ciascuna run con dentro i risultati del test
+  - una cartella per ciascuna run con i risultati del training
+- models 
+  - checkpoints -> cartella dove vengono salvati i modelli per ciascuna run
+- logs -> contiene i file di log 
+  - tensorboard -> contiene i tensorboard
+- main.py -> entry point del progetto. Gestisce Preprocess, Training e Test

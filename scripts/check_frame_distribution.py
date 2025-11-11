@@ -6,7 +6,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 
-# Path al tuo dataset frames
+# Path ai frames
 frames_dir = Path("data/frames")
 
 # Analizza distribuzione
@@ -33,7 +33,7 @@ print(f"  Media:   {frame_counts.mean():.1f}")
 print(f"  Mediana: {np.median(frame_counts):.1f}")
 print(f"  Std:     {frame_counts.std():.1f}")
 
-# Distribuzione per range
+# Distribuzione per range di frame
 print(f"\nDistribuzione:")
 print(f"  0-30 frames:     {(frame_counts <= 30).sum()} clip ({(frame_counts <= 30).sum()/len(frame_counts)*100:.1f}%)")
 print(f"  31-50 frames:    {((frame_counts > 30) & (frame_counts <= 50)).sum()} clip ({((frame_counts > 30) & (frame_counts <= 50)).sum()/len(frame_counts)*100:.1f}%)")
@@ -50,15 +50,12 @@ for idx in reversed(top_indices):
 # Calcola memoria richiesta per clip più lunga
 max_frames = frame_counts.max()
 memory_mb = max_frames * 224 * 224 * 3 * 4 / (1024**2)
-print(f"\n⚠️  PROBLEMA MEMORIA:")
+print(f"\n⚠️ MEMORIA RICHIESTA PER CLIP PIU LUNGA:")
 print(f"  Clip più lunga: {max_frames} frames")
 print(f"  Memoria necessaria: {memory_mb:.0f} MB per singola clip!")
 print(f"  Con batch_size=1: {memory_mb:.0f} MB")
-print(f"  Con batch_size=4: {memory_mb*4:.0f} MB")
+print(f"  Con batch_size=8: {memory_mb*8:.0f} MB")
 
-if max_frames > 100:
-    print(f"\n❌ CRITICO: Clip troppo lunghe per essere caricate in memoria!")
-    print(f"   Soluzione necessaria: Reimplementare sampling nel dataloader")
 
 # Plot distribuzione
 plt.figure(figsize=(12, 6))
