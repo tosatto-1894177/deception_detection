@@ -1,6 +1,6 @@
 """
 Metrics Tracking & Visualization
-Sistema completo per tracciare metriche durante training e generare grafici per tesi.
+Sistema completo per tracciare metriche durante training e generare grafici finali
 """
 
 import torch
@@ -14,40 +14,39 @@ from sklearn.metrics import (
 from pathlib import Path
 import json
 from datetime import datetime
-import pandas as pd
 
 
 class MetricsTracker:
     """
-    Tracker completo per metriche di training/validation/test.
-    Calcola e salva: F1, Accuracy, Precision, Recall, Loss, Confusion Matrix.
+    Tracker completo per metriche di training/validation/test
+    Calcola e salva: F1, Accuracy, Precision, Recall, Loss, Confusion Matrix
     """
 
     def __init__(self, num_classes=2, class_names=None):
         """
         Args:
             num_classes: Numero di classi (2 per truth/lie)
-            class_names: Lista nomi classi ['Truth', 'Deception']
+            class_names: Lista dei nomi delle classi ['Truth', 'Deception']
         """
         self.num_classes = num_classes
         self.class_names = class_names or ['Truth', 'Deception']
 
-        # History per ogni epoch
+        # Storia per ogni epoch
         self.history = {
             'train': {'loss': [], 'accuracy': [], 'f1': [], 'precision': [], 'recall': []},
             'val': {'loss': [], 'accuracy': [], 'f1': [], 'precision': [], 'recall': []},
         }
 
-        # Best metrics
+        # Migliori metriche
         self.best_val_f1 = 0.0
         self.best_val_acc = 0.0
         self.best_epoch = 0
 
-        # Per epoch corrente
+        # Reset per epoch corrente
         self.reset_epoch()
 
     def reset_epoch(self):
-        """Reset accumulatori per nuova epoch."""
+        """Resetta accumulatori per nuova epoch"""
         self.epoch_predictions = []
         self.epoch_targets = []
         self.epoch_probabilities = []
@@ -55,7 +54,7 @@ class MetricsTracker:
 
     def update(self, predictions, targets, loss=None, probabilities=None):
         """
-        Aggiorna metriche con batch corrente.
+        Aggiorna metriche con batch corrente
 
         Args:
             predictions: (batch_size,) tensor o list di predizioni
@@ -63,7 +62,7 @@ class MetricsTracker:
             loss: scalar, loss del batch (opzionale)
             probabilities: (batch_size, num_classes) probabilità (opzionale)
         """
-        # Converti a numpy
+        # Converti a numpy (prima muove su cpu)
         if torch.is_tensor(predictions):
             predictions = predictions.detach().cpu().numpy()
         if torch.is_tensor(targets):
@@ -82,7 +81,7 @@ class MetricsTracker:
 
     def compute_epoch_metrics(self, phase='train'):
         """
-        Calcola metriche aggregate per l'epoca corrente.
+        Calcola metriche aggregate per l'epoch corrente
 
         Args:
             phase: 'train' o 'val'
@@ -90,22 +89,19 @@ class MetricsTracker:
         Returns:
             dict con tutte le metriche
         """
+        # recupera le predizioni e i target dell'epoch
         predictions = np.array(self.epoch_predictions)
         targets = np.array(self.epoch_targets)
 
         # Calcola metriche
-        metrics = {
-            'loss': np.mean(self.epoch_losses) if self.epoch_losses else 0.0,
-            'accuracy': accuracy_score(targets, predictions),
-            'precision': precision_score(targets, predictions, average='binary', zero_division=0),
-            'recall': recall_score(targets, predictions, average='binary', zero_division=0),
-            'f1': f1_score(targets, predictions, average='binary', zero_division=0),
-        }
+        metrics = {'loss': np.mean(self.epoch_losses) if self.epoch_losses else 0.0,
+                   'accuracy': accuracy_score(targets, predictions),
+                   'precision': precision_score(targets, predictions, average='binary', zero_division=0),
+                   'recall': recall_score(targets, predictions, average='binary', zero_division=0),
+                   'f1': f1_score(targets, predictions, average='binary', zero_division=0),
+                   'confusion_matrix': confusion_matrix(targets, predictions)}
 
-        # Confusion matrix
-        metrics['confusion_matrix'] = confusion_matrix(targets, predictions)
-
-        # Per-class metrics
+        # Metriche per classe
         precision_per_class = precision_score(targets, predictions, average=None, zero_division=0)
         recall_per_class = recall_score(targets, predictions, average=None, zero_division=0)
         f1_per_class = f1_score(targets, predictions, average=None, zero_division=0)
@@ -133,7 +129,7 @@ class MetricsTracker:
             self.history[phase]['precision'].append(metrics['precision'])
             self.history[phase]['recall'].append(metrics['recall'])
 
-        # Aggiorna best metrics (solo per validation)
+        # Aggiorna le metriche migliori (solo per validation)
         if phase == 'val':
             if metrics['f1'] > self.best_val_f1:
                 self.best_val_f1 = metrics['f1']
@@ -144,7 +140,7 @@ class MetricsTracker:
         return metrics
 
     def print_epoch_summary(self, epoch, metrics_train, metrics_val=None):
-        """Stampa riassunto metriche per epoca."""
+        """Stampa riassunto metriche per epoch"""
         print(f"\n{'=' * 70}")
         print(f"EPOCH {epoch + 1} SUMMARY")
         print(f"{'=' * 70}")
@@ -174,7 +170,7 @@ class MetricsTracker:
         print(f"{'=' * 70}\n")
 
     def save_metrics(self, save_dir, filename='metrics_history.json'):
-        """Salva history metriche in JSON."""
+        """Salva la metric history in uno JSON"""
         save_path = Path(save_dir) / filename
         save_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -192,7 +188,7 @@ class MetricsTracker:
         print(f"✓ Metrics salvate in: {save_path}")
 
     def save_confusion_matrix(self, save_dir, phase='val', filename='confusion_matrix_final.npy'):
-        """Salva confusion matrix finale."""
+        """Salva confusion matrix finale"""
         save_path = Path(save_dir) / filename
 
         predictions = np.array(self.epoch_predictions)
@@ -205,7 +201,7 @@ class MetricsTracker:
         return cm
 
     def generate_classification_report(self, save_dir=None):
-        """Genera classification report dettagliato."""
+        """Genera classification report dettagliato"""
         predictions = np.array(self.epoch_predictions)
         targets = np.array(self.epoch_targets)
 
@@ -231,8 +227,7 @@ class MetricsTracker:
 
 class MetricsVisualizer:
     """
-    Generatore grafici per tesi.
-    Crea visualizzazioni publication-ready delle metriche.
+    Crea grafici delle metriche
     """
 
     def __init__(self, style='seaborn-v0_8-darkgrid'):
@@ -245,7 +240,6 @@ class MetricsVisualizer:
         except:
             plt.style.use('default')
 
-        # Colori professionali per tesi
         self.colors = {
             'train': '#2E86AB',  # Blu
             'val': '#A23B72',  # Viola
@@ -255,7 +249,7 @@ class MetricsVisualizer:
 
     def plot_training_curves(self, history, save_dir, show=False):
         """
-        Plotta curve di training (loss, accuracy, F1, precision, recall).
+        Plotta curve di training (loss, accuracy, F1, precision, recall)
 
         Args:
             history: Dict da MetricsTracker.history
@@ -311,11 +305,11 @@ class MetricsVisualizer:
     def plot_confusion_matrix(self, cm, class_names, save_dir,
                               normalize=False, show=False):
         """
-        Plotta confusion matrix.
+        Plotta confusion matrix
 
         Args:
             cm: Confusion matrix (2x2 array)
-            class_names: Lista nomi classi
+            class_names: Lista dei nomi delle classi
             save_dir: Directory output
             normalize: Se True, normalizza per riga (recall)
             show: Mostra plot interattivo
@@ -357,7 +351,7 @@ class MetricsVisualizer:
 
     def plot_roc_curve(self, roc_data, save_dir, show=False):
         """
-        Plotta ROC curve.
+        Plotta ROC curve
 
         Args:
             roc_data: Dict con 'fpr', 'tpr' da MetricsTracker
@@ -401,7 +395,7 @@ class MetricsVisualizer:
     def plot_per_class_metrics(self, metrics_per_class, class_names,
                                save_dir, show=False):
         """
-        Plotta metriche per classe (bar chart).
+        Plotta metriche per classe (bar chart)
 
         Args:
             metrics_per_class: Dict con 'precision', 'recall', 'f1' per classe
@@ -444,7 +438,7 @@ class MetricsVisualizer:
 
     def generate_all_plots(self, tracker, save_dir, show=False):
         """
-        Genera tutti i plot in una volta.
+        Genera tutti i plot in una volta
 
         Args:
             tracker: Istanza di MetricsTracker
@@ -452,7 +446,7 @@ class MetricsVisualizer:
             show: Mostra plot interattivi
         """
         print("\n" + "=" * 70)
-        print("GENERAZIONE GRAFICI PER TESI")
+        print("GENERAZIONE GRAFICI")
         print("=" * 70 + "\n")
 
         save_dir = Path(save_dir)
@@ -496,72 +490,3 @@ class MetricsVisualizer:
 
         print("\n✅ Tutti i grafici generati con successo!")
         print(f"📁 Salvati in: {save_dir.resolve()}\n")
-
-
-# ============ TEST DEL SISTEMA ============
-
-if __name__ == "__main__":
-    """Test del sistema di metriche."""
-
-    print("=" * 70)
-    print("TEST METRICS TRACKER & VISUALIZER")
-    print("=" * 70)
-
-    # Simula training per 5 epochs
-    tracker = MetricsTracker(num_classes=2, class_names=['Truth', 'Deception'])
-
-    np.random.seed(42)
-
-    for epoch in range(5):
-        print(f"\nSimulando epoch {epoch + 1}...")
-
-        # Simula training
-        tracker.reset_epoch()
-        for _ in range(10):  # 10 batch
-            # Predizioni random che migliorano nel tempo
-            targets = np.random.randint(0, 2, size=8)
-            # Modello migliora col tempo
-            noise = max(0.5 - epoch * 0.08, 0.1)
-            predictions = targets.copy()
-            flip_mask = np.random.random(8) < noise
-            predictions[flip_mask] = 1 - predictions[flip_mask]
-
-            probs = np.random.random((8, 2))
-            probs = probs / probs.sum(axis=1, keepdims=True)
-
-            loss = 0.7 - epoch * 0.1 + np.random.normal(0, 0.05)
-
-            tracker.update(predictions, targets, loss, probs)
-
-        metrics_train = tracker.compute_epoch_metrics('train')
-
-        # Simula validation
-        tracker.reset_epoch()
-        for _ in range(3):  # 3 batch
-            targets = np.random.randint(0, 2, size=8)
-            noise = max(0.5 - epoch * 0.08, 0.1)
-            predictions = targets.copy()
-            flip_mask = np.random.random(8) < noise
-            predictions[flip_mask] = 1 - predictions[flip_mask]
-
-            probs = np.random.random((8, 2))
-            probs = probs / probs.sum(axis=1, keepdims=True)
-
-            loss = 0.7 - epoch * 0.1 + np.random.normal(0, 0.05)
-
-            tracker.update(predictions, targets, loss, probs)
-
-        metrics_val = tracker.compute_epoch_metrics('val')
-
-        tracker.print_epoch_summary(epoch, metrics_train, metrics_val)
-
-    # Salva metriche
-    save_dir = Path('results/test_metrics')
-    tracker.save_metrics(save_dir)
-    tracker.generate_classification_report(save_dir)
-
-    # Genera grafici
-    visualizer = MetricsVisualizer()
-    visualizer.generate_all_plots(tracker, save_dir, show=False)
-
-    print("\n✅ Test completato! Controlla 'results/test_metrics/' per i file generati.")

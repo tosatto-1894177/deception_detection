@@ -1,6 +1,6 @@
 """
 Deception Detection - Main Pipeline
-Gestisce preprocessing, training e testing del modello.
+Gestisce preprocessing, training e test del modello
 """
 
 import argparse
@@ -10,7 +10,7 @@ from torch.utils.data import DataLoader
 
 from src.config_loader import load_config
 from scripts.frame_extractor import process_dolos_with_faces
-from src.frame_dataset import DOLOSFrameDataset, collate_fn_with_padding, load_dolos_fold
+from src.dataset import DOLOSDataset, collate_fn_with_padding, load_dolos_fold
 from src.train import train_model
 from datetime import datetime
 from src.model import build_model
@@ -18,16 +18,15 @@ from torch.utils.data import Subset
 import numpy as np
 from src.metrics import MetricsTracker, MetricsVisualizer
 from tqdm import tqdm
-from src.frame_dataset import create_random_split
 import json
 
-# Ottimizzazioni memoria GPU
+# Ottimizzazione memoria GPU
 torch.backends.cudnn.benchmark = True
 torch.cuda.empty_cache()
 
 
 def parse_args():
-    """Parse command line arguments."""
+    """Parsa gli argomenti della linea di comando"""
     parser = argparse.ArgumentParser(description='Deception Detection Pipeline')
 
     parser.add_argument('--config', type=str, default='config/config.yaml',
@@ -45,11 +44,11 @@ def parse_args():
     parser.add_argument('--device', type=str, choices=['cpu', 'cuda'],
                         help='Override device')
 
-    # Split type
+    # Subject split - se presente gestisce la creazione del dataset con subject split
     parser.add_argument('--subject_split', action='store_true',
                         help='Usa subject-independent split custom (per training finale)')
 
-    # DOLOS type
+    # Split con fold DOLOS
     parser.add_argument('--dolos_fold', action='store_true',
                         help='Usa fold DOLOS ufficiali (comparabile letteratura)')
 
@@ -58,18 +57,17 @@ def parse_args():
 
 def preprocess(config):
     """
-    Estrai frame dai video con face detection.
-    Eseguito UNA VOLTA SOLA all'inizio.
+    Modalità per l'estrazione dei frame dai video con face detection
+    Utilizza Haar
     """
-    print("\n" + "="*70)
+    print("\n" + "="*80)
     print("PREPROCESSING: Estrazione frame con face detection")
-    print("="*70)
+    print("="*80)
 
     video_dir = Path(config.get('paths.video_dir'))
     frames_dir = Path(config.get('paths.frames_dir'))
 
     print(f"  Cartella delle clip: {video_dir.resolve()}")
-    print(f"  Frame da salvare in: {frames_dir.resolve()}")
 
     if not video_dir.exists():
         raise FileNotFoundError(f"Directory video non trovata: {video_dir}")
@@ -91,28 +89,26 @@ def preprocess(config):
 
 def create_dataloaders(config, use_subject_split=False, use_dolos_fold=False):
     """
-    Crea DataLoader per train/val/test.
+    Crea DataLoader per train/val/test
 
     Args:
-        config: Config object
-        use_subject_split: Se True, usa subject-independent split custom
-        use_dolos_fold: Se True, usa fold DOLOS ufficiali (non subject-independent)
-        Se entrambi False, usa random split (più veloce per test)
+        config: config.yaml
+        use_subject_split: Se True utilizza la funzione per fare subject-independent split
+        use_dolos_fold: Se True, utilizza i fold DOLOS ufficiali (non subject-independent)
+        Se entrambi False, utilizza random split (più veloce per test)
     """
-    print("\n" + "="*70)
+    print("\n" + "="*80)
     print("CARICAMENTO DATASET")
-    print("="*70)
+    print("="*80)
 
     frames_dir = config.get('paths.frames_dir')
     batch_size = config['training']['batch_size']
     annotation_file = config.get('paths.train_annotations')
 
     if use_dolos_fold:
-        # ✅ NUOVO: Usa fold DOLOS ufficiali (comparabile con letteratura)
-        print("\n📁 Usando FOLD DOLOS UFFICIALI")
-        print("   ⚠️  NON subject-independent (overlap soggetti)")
+        # Usa fold DOLOS ufficiali
 
-        from src.frame_dataset import create_dolos_fold_split
+        from src.dataset import create_dolos_fold_split
 
         fold_idx = config.get('dataset.fold_idx', 1)
         train_fold_path = Path(f'data/splits/train_fold{fold_idx}.csv')
@@ -128,9 +124,8 @@ def create_dataloaders(config, use_subject_split=False, use_dolos_fold=False):
             max_frames=50
         )
 
-    elif use_subject_split:
-        # Subject-Independent Split (RACCOMANDATO per training finale)
-        print("\n🎓 Usando SUBJECT-INDEPENDENT SPLIT")
+    """elif use_subject_split:
+        # Subject-Independent Split
 
         from src.frame_dataset import create_subject_independent_split
 
@@ -146,20 +141,7 @@ def create_dataloaders(config, use_subject_split=False, use_dolos_fold=False):
             test_fold_path=test_fold_path,
             val_ratio=config.get('dataset.val_ratio', 0.2),
             seed=config.get('dataset.seed', 42)
-        )
-
-    else:
-        # Random Split (VELOCE per test/demo)
-        print("\n⚡ Usando RANDOM SPLIT (veloce per test)")
-
-        train_dataset, val_dataset, test_dataset = create_random_split(
-            frames_dir=frames_dir,
-            annotation_file=annotation_file,
-            train_ratio=config.get('dataset.train_ratio', 0.7),
-            val_ratio=config.get('dataset.val_ratio', 0.15),
-            test_ratio=config.get('dataset.test_ratio', 0.15),
-            seed=config.get('dataset.seed', 42)
-        )
+        )"""
 
     # Crea DataLoaders
     train_loader = DataLoader(
@@ -199,20 +181,21 @@ def create_dataloaders(config, use_subject_split=False, use_dolos_fold=False):
 
 def test_with_real_batch(config, use_subject_split=False, use_dolos_fold=False):
     """
-    Test con un batch reale dal dataset.
-    Verifica che tutto funzioni prima del training completo.
+    Funzione di utility:
+        Esegue un test con un batch reale dal dataset
+        Verifica che tutto funzioni prima del training completo.
     """
-    print("\n" + "="*70)
+    print("\n" + "="*80)
     print("TEST CON BATCH REALE")
-    print("="*70)
+    print("="*80)
 
-    # Crea dataloader
+    # Crea il dataloader
     train_loader, _, _ = create_dataloaders(config, use_subject_split, use_dolos_fold)
 
-    # Build model
+    # Costruisce il modello
     model, device = build_model(config)
 
-    print("\nCaricamento primo batch...")
+    print("\nCaricamento primo batch")
     frames, labels, lengths, mask, metadata = next(iter(train_loader))
 
     print(f"\nBatch info:")
@@ -256,9 +239,9 @@ def demo_mode(config):
     Modalità demo: mini-training su subset piccolo per test rapido.
     Utile per verificare che tutto funzioni prima del training completo.
     """
-    print("\n" + "="*70)
+    print("\n" + "="*80)
     print("DEMO MODE: Mini-training su subset ridotto")
-    print("="*70)
+    print("="*80)
 
     # Override config per demo veloce
     original_epochs = config['training']['num_epochs']
@@ -273,9 +256,9 @@ def demo_mode(config):
     print(f"  Epochs: 3 (original: {original_epochs})")
     print(f"  Batch size: 2")
     print(f"  Device: {config['training']['device']}")
-    print(f"  Split: Random (veloce)")
+    print(f"  Split: Random")
 
-    # Crea dataloaders con RANDOM split (più veloce per demo)
+    # Crea dataloaders con RANDOM split
     train_loader, val_loader, test_loader = create_dataloaders(config, use_subject_split=False)
 
     # Limita a pochi batch per demo
@@ -310,21 +293,22 @@ def demo_mode(config):
 
 def train(config, use_subject_split=False, use_dolos_fold=False):
     """
-    Training completo del modello.
+    Training completo del modello
 
     Args:
-        config: Config object
-        use_subject_split: Se True, usa subject-independent split custom
-        use_dolos_fold: se True, usa dolos split ufficiale
+        config: config.yaml
+        use_subject_split: Se True utilizza la funzione per fare subject-independent split
+        use_dolos_fold: Se True, utilizza i fold DOLOS ufficiali (non subject-independent)
+        Se entrambi False, utilizza random split (più veloce per test)
     """
-    print("\n" + "="*70)
+    print("\n" + "="*80)
     print("TRAINING COMPLETO")
-    print("="*70)
+    print("="*80)
 
     # Crea dataloaders
     train_loader, val_loader, test_loader = create_dataloaders(config, use_subject_split, use_dolos_fold)
 
-    # Training
+    # Costruisce il trainer, ovvero costruisce il modello e lo addestra
     trainer = train_model(config, train_loader, val_loader)
 
     # Salva modello finale
@@ -342,43 +326,37 @@ def train(config, use_subject_split=False, use_dolos_fold=False):
 
 def test(config, use_dolos_fold=False):
     """
-    Test finale con best model su test set.
+    Test finale tramite il modello migliore salvato durante training
 
     Args:
-        config: Config object
+        config: config.yaml
         use_dolos_fold: Se True, usa test fold DOLOS
     """
-    print("\n" + "=" * 70)
-    print("🧪 TESTING - Valutazione Finale su Test Set")
-    print("=" * 70)
 
-    # 1. Verifica che esista best model
+    # 1. Verifica che esista best model salvato
     best_model_path = Path(config.get('paths.models_dir')) / 'best_model.pth'
 
     if not best_model_path.exists():
-        print(f"❌ Best model non trovato: {best_model_path}")
+        print(f"❌ Modello migliore non trovato: {best_model_path}")
         print("   Esegui prima il training!")
         return
 
-    print(f"\n📂 Caricando best model da: {best_model_path}")
+    print(f"\n📂 Caricando il modello migliore da: {best_model_path}")
 
     # 2. Carica test set
     frames_dir = config.get('paths.frames_dir')
     annotation_file = config.get('paths.train_annotations')
     max_frames = 50
-    sampling_strategy = config.get('preprocessing.sampling_strategy', 'uniform')
 
     if use_dolos_fold:
         # Test fold DOLOS
         fold_idx = config.get('dataset.fold_idx', 1)
         test_fold_path = Path(f'data/splits/test_fold{fold_idx}.csv')
 
-        print(f"\n📊 Caricando test fold DOLOS: {test_fold_path.name}")
-
         test_clips = load_dolos_fold(test_fold_path)
 
         # Filtra clip disponibili
-        full_dataset = DOLOSFrameDataset(
+        full_dataset = DOLOSDataset(
             root_dir=frames_dir,
             annotation_file=annotation_file,
             clip_filter=None,
@@ -390,23 +368,10 @@ def test(config, use_dolos_fold=False):
 
         print(f"   Clip disponibili: {len(test_clips_available)}/{len(test_clips)}")
 
-        test_dataset = DOLOSFrameDataset(
+        test_dataset = DOLOSDataset(
             root_dir=frames_dir,
             annotation_file=annotation_file,
             clip_filter=set(test_clips_available),
-            max_frames=max_frames
-        )
-    else:
-
-        print(f"\n📊 Ricostruendo test set (random split)")
-
-        _, _, test_dataset = create_random_split(
-            frames_dir=frames_dir,
-            annotation_file=annotation_file,
-            train_ratio=config.get('dataset.train_ratio', 0.7),
-            val_ratio=config.get('dataset.val_ratio', 0.15),
-            test_ratio=config.get('dataset.test_ratio', 0.15),
-            seed=config.get('dataset.seed', 42),
             max_frames=max_frames
         )
 
@@ -420,7 +385,7 @@ def test(config, use_dolos_fold=False):
         pin_memory=config.get('training.pin_memory', True)
     )
 
-    print(f"✅ Test set caricato: {len(test_dataset)} clips")
+    print(f"✅ Set di test caricato: {len(test_dataset)} clips")
 
     # 3. Carica modello
     device = torch.device(config['training']['device'])
@@ -430,10 +395,10 @@ def test(config, use_dolos_fold=False):
     model.load_state_dict(checkpoint['model_state_dict'])
     model.eval()
 
-    print(f"✅ Best model caricato (epoch {checkpoint['epoch'] + 1})")
+    print(f"✅ Modello migliore caricato (epoch {checkpoint['epoch'] + 1})")
 
     # 4. Inference su test set
-    print(f"\n🔬 Eseguendo inference su test set...")
+    print(f"\nEseguendo inference su test set...")
 
     metrics_tracker = MetricsTracker(
         num_classes=config.get('model.classifier.num_classes', 2),
@@ -467,9 +432,9 @@ def test(config, use_dolos_fold=False):
     test_metrics = metrics_tracker.compute_epoch_metrics('test')
 
     # 6. Print risultati
-    print("\n" + "=" * 70)
-    print("📊 TEST SET RESULTS - FINAL PERFORMANCE")
-    print("=" * 70)
+    print("\n" + "=" * 80)
+    print("RISULTATI DEL SET DI TEST - PERFORMANCE FINALE")
+    print("=" * 80)
     print(f"Accuracy:  {test_metrics['accuracy']:.4f}")
     print(f"Precision: {test_metrics['precision']:.4f}")
     print(f"Recall:    {test_metrics['recall']:.4f}")
@@ -478,7 +443,7 @@ def test(config, use_dolos_fold=False):
     if 'roc_auc' in test_metrics:
         print(f"ROC-AUC:   {test_metrics['roc_auc']:.4f}")
 
-    print("=" * 70)
+    print("=" * 80)
 
     # Timestamp per organizzare i risultati
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -495,10 +460,12 @@ def test(config, use_dolos_fold=False):
 
     # 8. Salva risultati
 
+    test_metrics_json = convert_to_json_serializable(test_metrics)
+
     # Salva metriche
 
     test_results = {
-        'test_metrics': test_metrics,
+        'test_metrics': test_metrics_json,
         'checkpoint_epoch': checkpoint['epoch'] + 1,
         'num_test_samples': len(test_dataset),
         'timestamp': datetime.now().isoformat()
@@ -521,6 +488,7 @@ def test(config, use_dolos_fold=False):
         show=False
     )
 
+    # Confusion metrix normalizzata
     visualizer.plot_confusion_matrix(
         test_metrics['confusion_matrix'],
         class_names=['Truth', 'Deception'],
@@ -547,18 +515,32 @@ def test(config, use_dolos_fold=False):
 
     print(f"✅ Grafici salvati in: {test_results_dir}")
 
-    print("\n" + "=" * 70)
+    print("\n" + "=" * 80)
     print("✅ TEST COMPLETATO!")
-    print("=" * 70)
+    print("=" * 80)
     print(f"🎯 Test F1: {test_metrics['f1']:.4f}")
     print(f"📁 Risultati: {test_results_dir}")
-    print("=" * 70)
+    print("=" * 80)
 
     return test_metrics
 
+def convert_to_json_serializable(obj):
+    """Converte ricorsivamente numpy arrays in liste per JSON"""
+    import numpy as np
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()
+    elif isinstance(obj, dict):
+        return {k: convert_to_json_serializable(v) for k, v in obj.items()}
+    elif isinstance(obj, (list, tuple)):
+        return [convert_to_json_serializable(item) for item in obj]
+    elif isinstance(obj, (np.integer, np.floating)):
+        return float(obj)
+    else:
+        return obj
+
 
 def main():
-    """Main entry point."""
+    """Entry point del main"""
     args = parse_args()
 
     # Carica config
@@ -595,9 +577,9 @@ def main():
     elif args.mode == 'test':
         test(config, use_dolos_fold=args.dolos_fold)
 
-    print("\n" + "="*70)
+    print("\n" + "="*80)
     print("✓ COMPLETATO")
-    print("="*70)
+    print("="*80)
 
 
 if __name__ == "__main__":

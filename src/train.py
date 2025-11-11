@@ -1,32 +1,32 @@
 """
-Training Loop Completo con Metriche
-Sistema completo di training con early stopping, checkpointing e logging.
+Training Loop completo con metriche
+Sistema completo di training con early stopping, checkpointing e logging
 """
 
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import DataLoader
 from pathlib import Path
 from tqdm import tqdm
 import time
 from datetime import datetime
 
 from src.model import build_model
-from src.frame_dataset import DOLOSFrameDataset, collate_fn_with_padding
 from src.metrics import MetricsTracker, MetricsVisualizer
 
 
 class Trainer:
     """
-    Trainer completo per DeceptionNet.
-    Gestisce training, validation, early stopping, checkpointing.
+    Trainer completo per DcDtModel
+    Gestisce training, validation, early stopping, checkpointing
     """
 
     def __init__(self, config, train_loader, val_loader=None):
         """
+        Inizializza tutti i componenti necessari per il training
+
         Args:
-            config: Oggetto Config
+            config: config.yaml
             train_loader: DataLoader training
             val_loader: DataLoader validation (opzionale)
         """
@@ -36,9 +36,8 @@ class Trainer:
 
         # Device
         self.device = torch.device(config['training']['device'])
-        print(f"Using device: {self.device}")
 
-        # Build model
+        # Modello
         self.model, _ = build_model(config)
 
         # Loss function
@@ -78,7 +77,7 @@ class Trainer:
         self.best_val_f1 = 0.0
 
     def _setup_loss(self):
-        """Setup loss function."""
+        """Setta la loss function"""
         loss_type = self.config.get('training.loss.type', 'cross_entropy')
 
         if loss_type == 'cross_entropy':
@@ -98,21 +97,20 @@ class Trainer:
         return criterion
 
     def _setup_optimizer(self):
-        """Setup optimizer."""
+        """Setta l'optimizer che si occupa di aggiornare i pesi"""
         opt_name = self.config.get('training.optimizer', 'adam').lower()
         lr = self.config['training']['learning_rate']
-        weight_decay = self.config.get('training.weight_decay', 0.0)
+
 
         # Solo parametri trainable
         trainable_params = filter(lambda p: p.requires_grad, self.model.parameters())
 
         if opt_name == 'adam':
+            weight_decay = self.config.get('training.weight_decay', 0.0001)
             optimizer = optim.Adam(trainable_params, lr=lr, weight_decay=weight_decay)
         elif opt_name == 'adamw':
+            weight_decay = self.config.get('training.weight_decay', 0.01)
             optimizer = optim.AdamW(trainable_params, lr=lr, weight_decay=weight_decay)
-        elif opt_name == 'sgd':
-            optimizer = optim.SGD(trainable_params, lr=lr,
-                                  momentum=0.9, weight_decay=weight_decay)
         else:
             raise ValueError(f"Optimizer '{opt_name}' non supportato")
 
@@ -120,7 +118,7 @@ class Trainer:
         return optimizer
 
     def _setup_scheduler(self):
-        """Setup learning rate scheduler."""
+        """Setta lo scheduler per ridurre il learning rate durante il training"""
         scheduler_config = self.config.get('training.scheduler')
 
         if scheduler_config is None or scheduler_config.get('type') is None:
@@ -130,6 +128,7 @@ class Trainer:
         scheduler_type = scheduler_config['type'].lower()
 
         if scheduler_type == 'step':
+            # Riduce LR ogni n epoch
             step_size = scheduler_config.get('step_size', 10)
             gamma = scheduler_config.get('gamma', 0.5)
             scheduler = optim.lr_scheduler.StepLR(
@@ -138,6 +137,7 @@ class Trainer:
             print(f"LR Scheduler: StepLR (step={step_size}, gamma={gamma})")
 
         elif scheduler_type == 'cosine':
+            # Riduzione "morbida" come funzione coseno
             T_max = self.config['training']['num_epochs']
             scheduler = optim.lr_scheduler.CosineAnnealingLR(
                 self.optimizer, T_max=T_max
@@ -145,6 +145,7 @@ class Trainer:
             print(f"LR Scheduler: CosineAnnealingLR (T_max={T_max})")
 
         elif scheduler_type == 'plateau':
+            # Riduce quando validation non migliora
             patience = scheduler_config.get('patience', 5)
             scheduler = optim.lr_scheduler.ReduceLROnPlateau(
                 self.optimizer, mode='max', factor=0.5,
@@ -158,14 +159,15 @@ class Trainer:
         return scheduler
 
     def train_epoch(self):
-        """Training per una singola epoch."""
+        """Training per una singola epoch"""
         self.model.train()
         self.metrics_tracker.reset_epoch()
 
+        # Progress bar
         pbar = tqdm(self.train_loader, desc=f"Epoch {self.current_epoch + 1} [TRAIN]")
 
         for batch_idx, (frames, labels, lengths, mask, metadata) in enumerate(pbar):
-            # Move to device
+            # Muove su device
             frames = frames.to(self.device)
             labels = labels.to(self.device)
             mask = mask.to(self.device)
@@ -173,7 +175,7 @@ class Trainer:
             # Forward pass
             logits, attention_weights = self.model(frames, mask)
 
-            # Loss
+            # Calcola loss
             loss = self.criterion(logits, labels)
 
             # Backward pass
@@ -189,10 +191,11 @@ class Trainer:
 
             self.optimizer.step()
 
-            # Metrics
+            # Calcola metriche batch
             predictions = torch.argmax(logits, dim=1)
             probabilities = torch.softmax(logits, dim=1)
 
+            # Accumula metriche
             self.metrics_tracker.update(
                 predictions=predictions,
                 targets=labels,
@@ -200,7 +203,7 @@ class Trainer:
                 probabilities=probabilities
             )
 
-            # Update progress bar
+            # Aggiorna progress bar
             pbar.set_postfix({
                 'loss': f"{loss.item():.4f}",
                 'acc': f"{(predictions == labels).float().mean().item():.4f}"
@@ -215,17 +218,18 @@ class Trainer:
 
     @torch.no_grad()
     def validate_epoch(self):
-        """Validation per una singola epoch."""
+        """Validation per una singola epoch"""
         if self.val_loader is None:
             return None
 
         self.model.eval()
         self.metrics_tracker.reset_epoch()
 
+        # Progress bar
         pbar = tqdm(self.val_loader, desc=f"Epoch {self.current_epoch + 1} [VAL]")
 
         for frames, labels, lengths, mask, metadata in pbar:
-            # Move to device
+            # Muove su device
             frames = frames.to(self.device)
             labels = labels.to(self.device)
             mask = mask.to(self.device)
@@ -236,10 +240,11 @@ class Trainer:
             # Loss
             loss = self.criterion(logits, labels)
 
-            # Metrics
+            # Calcola metriche batch
             predictions = torch.argmax(logits, dim=1)
             probabilities = torch.softmax(logits, dim=1)
 
+            # Accumula metriche
             self.metrics_tracker.update(
                 predictions=predictions,
                 targets=labels,
@@ -247,7 +252,7 @@ class Trainer:
                 probabilities=probabilities
             )
 
-            # Update progress bar
+            # Aggiorna progress bar
             pbar.set_postfix({
                 'loss': f"{loss.item():.4f}",
                 'acc': f"{(predictions == labels).float().mean().item():.4f}"
@@ -293,7 +298,7 @@ class Trainer:
 
     def train(self, num_epochs=None):
         """
-        Training loop completo.
+        Training loop completo
 
         Args:
             num_epochs: Numero epoch (override config)
@@ -320,7 +325,7 @@ class Trainer:
             # Validation
             metrics_val = self.validate_epoch()
 
-            # Print summary
+            # Stampa le metriche dell'epoch
             self.metrics_tracker.print_epoch_summary(
                 epoch, metrics_train, metrics_val
             )
@@ -332,13 +337,13 @@ class Trainer:
                 else:
                     self.scheduler.step()
 
-            # Save checkpoint
+            # Gestione dei checkpoint
             is_best = False
             if metrics_val and metrics_val['f1'] > self.best_val_f1:
                 self.best_val_f1 = metrics_val['f1']
                 is_best = True
 
-            # Save every N epochs or if best
+            # Salva checkpoint ogni N epochs o se è il migliore
             save_every = self.config.get('validation.save_every_n_epochs', 5)
             if is_best or (epoch + 1) % save_every == 0 or (epoch + 1) == num_epochs:
                 self.save_checkpoint(metrics_val, is_best)
@@ -359,14 +364,14 @@ class Trainer:
         print("✅ TRAINING COMPLETATO!")
         print("=" * 70)
         print(f"Tempo totale: {elapsed_time / 3600:.2f} ore")
-        print(f"Best Val F1: {self.best_val_f1:.4f}")
+        print(f"Miglior valore F1: {self.best_val_f1:.4f}")
         print("=" * 70 + "\n")
 
         # Salva metriche e genera grafici
         self._save_final_results()
 
     def _save_final_results(self):
-        """Salva risultati finali e genera grafici."""
+        """Salva risultati finali e genera grafici"""
         print("\n" + "=" * 70)
         print("SALVATAGGIO RISULTATI FINALI")
         print("=" * 70 + "\n")
@@ -394,7 +399,7 @@ class Trainer:
 
 
 class EarlyStopping:
-    """Early stopping per evitare overfitting."""
+    """Early stopping per evitare overfitting"""
 
     def __init__(self, patience=10, min_delta=0.001, enabled=True):
         """
@@ -413,166 +418,40 @@ class EarlyStopping:
 
     def __call__(self, score):
         """
-        Aggiorna stato early stopping.
+        Aggiorna stato early stopping
 
         Args:
             score: Metrica da monitorare (es. val_f1)
         """
         if not self.enabled:
             return
-
+        # Prima epoch
         if self.best_score is None:
             self.best_score = score
+        # Non c'è miglioramento
         elif score < self.best_score + self.min_delta:
             self.counter += 1
+            # Il counter ha raggiunto il limite, interrompi esecuzione
             if self.counter >= self.patience:
                 self.should_stop = True
+        # C'è miglioramento
         else:
             self.best_score = score
             self.counter = 0
-
-
-# ============ FUNZIONE HELPER PER MAIN.PY ============
 
 def train_model(config, train_loader, val_loader=None):
     """
     Funzione wrapper per training da main.py
 
     Args:
-        config: Config object
+        config: config.yaml
         train_loader: Training DataLoader
         val_loader: Validation DataLoader (opzionale)
 
     Returns:
-        trainer: Oggetto Trainer con modello trainato
+        trainer: Oggetto Trainer con modello addestrato
     """
     trainer = Trainer(config, train_loader, val_loader)
     trainer.train()
 
     return trainer
-
-
-if __name__ == "__main__":
-    """
-    Test standalone del training loop.
-    Usa dati fake per verificare che tutto funzioni.
-    """
-    print("=" * 70)
-    print("TEST TRAINING LOOP")
-    print("=" * 70)
-
-
-    # Mock config
-    class MockConfig:
-        def __init__(self):
-            self._config = {
-                'model': {
-                    'resnet': {
-                        'architecture': 'resnet34',
-                        'pretrained': True,
-                        'freeze_layers': True
-                    },
-                    'tcn': {
-                        'hidden_channels': [128, 128],
-                        'kernel_size': 3,
-                        'dropout': 0.2
-                    },
-                    'attention': {
-                        'hidden_dim': 64
-                    },
-                    'classifier': {
-                        'hidden_dims': [64],
-                        'num_classes': 2,
-                        'dropout': 0.3
-                    }
-                },
-                'training': {
-                    'device': 'cpu',
-                    'num_epochs': 3,
-                    'learning_rate': 0.001,
-                    'weight_decay': 0.0001,
-                    'optimizer': 'adam',
-                    'batch_size': 2,
-                    'gradient_clip': 1.0,
-                    'loss': {
-                        'type': 'cross_entropy',
-                        'class_weights': None
-                    },
-                    'scheduler': {
-                        'type': 'step',
-                        'step_size': 2,
-                        'gamma': 0.5
-                    },
-                    'early_stopping': {
-                        'enabled': True,
-                        'patience': 5,
-                        'min_delta': 0.001
-                    }
-                },
-                'validation': {
-                    'save_every_n_epochs': 1
-                },
-                'paths': {
-                    'models_dir': 'models/checkpoints_test',
-                    'results_dir': 'results/test_training'
-                }
-            }
-
-        def get(self, key, default=None):
-            keys = key.split('.')
-            value = self._config
-            for k in keys:
-                if isinstance(value, dict) and k in value:
-                    value = value[k]
-                else:
-                    return default
-            return value
-
-        def __getitem__(self, key):
-            return self._config[key]
-
-        def to_dict(self):
-            return self._config.copy()
-
-
-    # Mock dataset
-    class MockDataset(torch.utils.data.Dataset):
-        def __init__(self, num_samples=20):
-            self.num_samples = num_samples
-
-        def __len__(self):
-            return self.num_samples
-
-        def __getitem__(self, idx):
-            seq_len = torch.randint(5, 15, (1,)).item()
-            frames = torch.randn(seq_len, 3, 224, 224)
-            label = idx % 2  # Alterna truth/lie
-
-            return {
-                'frames': frames,
-                'label': label,
-                'length': seq_len,
-                'clip_name': f'clip_{idx}',
-                'gender': 'Unknown'
-            }
-
-
-    from src.frame_dataset import collate_fn_with_padding
-
-    # Create dataloaders
-    train_dataset = MockDataset(20)
-    val_dataset = MockDataset(10)
-
-    train_loader = torch.utils.data.DataLoader(
-        train_dataset, batch_size=2, collate_fn=collate_fn_with_padding
-    )
-    val_loader = torch.utils.data.DataLoader(
-        val_dataset, batch_size=2, collate_fn=collate_fn_with_padding
-    )
-
-    # Train
-    config = MockConfig()
-    trainer = train_model(config, train_loader, val_loader)
-
-    print("\n✅ Test training loop completato!")
-    print(f"Controlla 'results/test_training/' per i risultati")

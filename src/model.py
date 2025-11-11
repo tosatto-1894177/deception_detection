@@ -1,5 +1,5 @@
 """
-DeceptionNet: Modello completo per Deception Detection
+DcDtModel: Modello completo per Deception Detection
 Architettura: ResNet → TCN → Attention → MLP
 """
 
@@ -10,11 +10,12 @@ from torchvision.models import resnet34, resnet50, ResNet34_Weights, ResNet50_We
 
 
 class ResNetFeatureExtractor(nn.Module):
-    """Wrapper per ResNet come feature extractor."""
+    """Wrapper per ResNet come estrattore di feature"""
 
     def __init__(self, architecture='resnet34', pretrained=True, freeze=True):
         super().__init__()
 
+        # Carica ResNet pre-addestrata
         if architecture == 'resnet34':
             weights = ResNet34_Weights.DEFAULT if pretrained else None
             self.resnet = resnet34(weights=weights)
@@ -54,13 +55,13 @@ class TemporalConvBlock(nn.Module):
         # Padding per mantenere lunghezza temporale
         padding = (kernel_size - 1) // 2
 
-        self.conv1 = nn.Conv1d(in_channels, out_channels, kernel_size,
-                               padding=padding)
+        # Prima convoluzione
+        self.conv1 = nn.Conv1d(in_channels, out_channels, kernel_size, padding=padding)
         self.bn1 = nn.BatchNorm1d(out_channels)
         self.dropout1 = nn.Dropout(dropout)
 
-        self.conv2 = nn.Conv1d(out_channels, out_channels, kernel_size,
-                               padding=padding)
+        # Seconda convoluzione
+        self.conv2 = nn.Conv1d(out_channels, out_channels, kernel_size, padding=padding)
         self.bn2 = nn.BatchNorm1d(out_channels)
         self.dropout2 = nn.Dropout(dropout)
 
@@ -76,7 +77,7 @@ class TemporalConvBlock(nn.Module):
         Returns:
             out: (batch, channels, seq_len)
         """
-        residual = x
+        residual = x # Salva input per skip connection
 
         out = self.conv1(x)
         out = self.bn1(out)
@@ -88,7 +89,7 @@ class TemporalConvBlock(nn.Module):
 
         # Residual connection
         if self.downsample is not None:
-            residual = self.downsample(residual)
+            residual = self.downsample(residual) # Adatta dimensioni
 
         out += residual
         out = F.relu(out)
@@ -98,25 +99,25 @@ class TemporalConvBlock(nn.Module):
 
 
 class TemporalConvNet(nn.Module):
-    """Temporal Convolutional Network per catturare dipendenze temporali."""
+    """Temporal Convolutional Network per catturare dipendenze temporali"""
 
     def __init__(self, input_dim, hidden_channels, kernel_size=3, dropout=0.2):
         """
         Args:
             input_dim: Dimensione feature input (512 per ResNet34)
             hidden_channels: Lista con numero canali per ogni layer [256, 256, 256]
-            kernel_size: Dimensione kernel convoluzionale
-            dropout: Dropout rate
+            kernel_size: Dimensione kernel convoluzionale (3 -> guarda 3 frame alla volta)
+            dropout: Dropout rate (percentuale di neuroni "spenti")
         """
         super().__init__()
 
         layers = []
-        num_levels = len(hidden_channels)
 
-        for i in range(num_levels):
+        for i in range(len(hidden_channels)):
             in_ch = input_dim if i == 0 else hidden_channels[i - 1]
             out_ch = hidden_channels[i]
 
+            # Crea blocco convoluzionale temporale
             layers.append(TemporalConvBlock(in_ch, out_ch, kernel_size, dropout))
 
         self.network = nn.Sequential(*layers)
@@ -133,7 +134,7 @@ class TemporalConvNet(nn.Module):
         # Conv1d richiede (batch, channels, seq_len)
         x = x.transpose(1, 2)  # (batch, feature_dim, seq_len)
 
-        out = self.network(x)
+        out = self.network(x) # Passa per 3 TemporalConvBlock
 
         # Torna a (batch, seq_len, channels)
         out = out.transpose(1, 2)
@@ -146,7 +147,7 @@ class TemporalConvNet(nn.Module):
 
 
 class TemporalAttention(nn.Module):
-    """Attention mechanism per aggregare frame temporali."""
+    """Attention mechanism per aggregare frame temporali"""
 
     def __init__(self, input_dim, hidden_dim=128):
         """
@@ -172,14 +173,14 @@ class TemporalAttention(nn.Module):
             context: (batch, feature_dim) - feature aggregate
             attention_weights: (batch, seq_len) - pesi attention
         """
-        # Calcola attention scores
+        # Calcola attention scores per ogni frame
         attn_scores = self.attention(x).squeeze(-1)  # (batch, seq_len)
 
-        # Applica mask: metti -inf dove c'è padding
+        # Maschera frame di padding
         if mask is not None:
             attn_scores = attn_scores.masked_fill(~mask, float('-inf'))
 
-        # Softmax per normalizzare
+        # Normalizza con softmax
         attention_weights = F.softmax(attn_scores, dim=1)  # (batch, seq_len)
 
         # Weighted sum
@@ -190,7 +191,7 @@ class TemporalAttention(nn.Module):
 
 
 class MLPClassifier(nn.Module):
-    """MLP finale per classificazione."""
+    """MLP finale per classificazione"""
 
     def __init__(self, input_dim, hidden_dims, num_classes=2, dropout=0.3):
         """
@@ -205,6 +206,7 @@ class MLPClassifier(nn.Module):
         layers = []
         prev_dim = input_dim
 
+        # Crea hidden layer
         for hidden_dim in hidden_dims:
             layers.extend([
                 nn.Linear(prev_dim, hidden_dim),
@@ -228,9 +230,9 @@ class MLPClassifier(nn.Module):
         return self.mlp(x)
 
 
-class DeceptionNet(nn.Module):
+class DcDtModel(nn.Module):
     """
-    Modello completo per Deception Detection.
+    Modello completo per Deception Detection
     Pipeline: Video frames → ResNet → TCN → Attention → MLP → Prediction
     """
 
@@ -276,36 +278,38 @@ class DeceptionNet(nn.Module):
 
     def forward(self, frames, mask=None):
         """
-        Forward pass completo.
+        Forward pass completo
 
         Args:
-            frames: (batch, seq_len, C, H, W) - Video frames
-            mask: (batch, seq_len) - True per frame reali, False per padding
+            frames: (batch, seq_len, C, H, W) = (8, 50, 3, 224, 224)
+            mask: (batch, seq_len) = (8, 50) - True per frame reali, False per padding
 
         Returns:
-            logits: (batch, num_classes) - Predizioni
-            attention_weights: (batch, seq_len) - Pesi attention (per visualizzazione)
+            logits: (batch, num_classes) = (8, 2) - Predizioni
+            attention_weights: (batch, seq_len) = (8, 50) - Pesi attention (per visualizzazione)
         """
         batch_size, seq_len, C, H, W = frames.shape
 
         # 1. Estrai feature con ResNet
-        # Reshape: (batch, seq_len, C, H, W) → (batch*seq_len, C, H, W)
+        # Reshape: (batch, seq_len, C, H, W) → (batch*seq_len, C, H, W) = (8, 50, 3, 224, 224) → (400, 3, 224, 224)
         frames_flat = frames.view(batch_size * seq_len, C, H, W)
 
-        # Forward ResNet
-        features = self.feature_extractor(frames_flat)  # (batch*seq_len, feature_dim)
+        # Forward ResNet = (400, 3, 224, 224) → (400, 512) = (batch*seq_len, feature_dim)
+        features = self.feature_extractor(frames_flat)
 
-        # Reshape back: (batch*seq_len, feature_dim) → (batch, seq_len, feature_dim)
+        # Reshape back: (batch*seq_len, feature_dim) → (batch, seq_len, feature_dim) = (400, 512) → (8, 50, 512)
         features = features.view(batch_size, seq_len, -1)
 
-        # 2. Temporal modeling con TCN
-        tcn_out = self.tcn(features, mask)  # (batch, seq_len, tcn_dim)
+        # 2. Cattura dipendenze temporali con TCN -> (batch, seq_len, tcn_dim) = (8, 50, 512) → (8, 50, 256)
+        tcn_out = self.tcn(features, mask)
 
-        # 3. Attention pooling
-        context, attention_weights = self.attention(tcn_out, mask)  # (batch, tcn_dim)
+        # 3. Attention pooling - aggrega frame pesati per importanza
+        # (8, 50, 256) → (8, 256) + (8, 50) = (batch, tcn_dim)
+        context, attention_weights = self.attention(tcn_out, mask)
 
-        # 4. Classificazione finale
-        logits = self.classifier(context)  # (batch, num_classes)
+        # 4. Classificazione finale - score per Truth/Deception
+        # (8, 256) → (8, 2) = (batch, num_classes)
+        logits = self.classifier(context)
 
         return logits, attention_weights
 
@@ -330,16 +334,16 @@ class DeceptionNet(nn.Module):
 
 def build_model(config):
     """
-    Factory function per costruire il modello.
+    Factory function per costruire il modello
 
     Args:
-        config: Oggetto Config
+        config: config.yaml
 
     Returns:
-        model: DeceptionNet
+        model: DcDtModel
         device: torch.device
     """
-    model = DeceptionNet(config)
+    model = DcDtModel(config)
 
     device = torch.device(config['training']['device'])
     model = model.to(device)
@@ -358,78 +362,3 @@ def build_model(config):
     print(f"{'=' * 70}\n")
 
     return model, device
-
-
-# ============ TEST DEL MODELLO ============
-
-if __name__ == "__main__":
-    """Test standalone del modello."""
-
-
-    # Mock config per test
-    class MockConfig:
-        def __init__(self):
-            self._config = {
-                'model': {
-                    'resnet': {
-                        'architecture': 'resnet34',
-                        'pretrained': True,
-                        'freeze_layers': True
-                    },
-                    'tcn': {
-                        'hidden_channels': [256, 256, 256],
-                        'kernel_size': 3,
-                        'dropout': 0.2
-                    },
-                    'attention': {
-                        'hidden_dim': 128
-                    },
-                    'classifier': {
-                        'hidden_dims': [128, 64],
-                        'num_classes': 2,
-                        'dropout': 0.3
-                    }
-                },
-                'training': {
-                    'device': 'cpu'
-                }
-            }
-
-        def get(self, key, default=None):
-            keys = key.split('.')
-            value = self._config
-            for k in keys:
-                value = value.get(k, {})
-            return value if value != {} else default
-
-        def __getitem__(self, key):
-            return self._config[key]
-
-
-    print("Test DeceptionNet")
-    print("=" * 70)
-
-    config = MockConfig()
-    model, device = build_model(config)
-
-    # Test forward pass
-    batch_size = 2
-    seq_len = 10
-    frames = torch.randn(batch_size, seq_len, 3, 224, 224)
-    mask = torch.ones(batch_size, seq_len, dtype=torch.bool)
-    mask[0, 8:] = False  # Simula padding su primo sample
-
-    print("Input:")
-    print(f"  Frames: {frames.shape}")
-    print(f"  Mask: {mask.shape}")
-
-    model.eval()
-    with torch.no_grad():
-        logits, attention_weights = model(frames, mask)
-
-    print("\nOutput:")
-    print(f"  Logits: {logits.shape}")
-    print(f"  Attention weights: {attention_weights.shape}")
-    print(f"  Predictions: {torch.argmax(logits, dim=1)}")
-
-    print("\n✓ Test completato!")
