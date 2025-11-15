@@ -79,12 +79,14 @@ class MetricsTracker:
         if probabilities is not None:
             self.epoch_probabilities.extend(probabilities.tolist())
 
-    def compute_epoch_metrics(self, phase='train'):
+    def compute_epoch_metrics(self, phase='train', learning_rate=None, epoch_duration=None):
         """
         Calcola metriche aggregate per l'epoch corrente
 
         Args:
             phase: 'train' o 'val'
+            learning_rate: LR corrente
+            epoch_duration: durata del singolo epoch in secondi
 
         Returns:
             dict con tutte le metriche
@@ -93,24 +95,30 @@ class MetricsTracker:
         predictions = np.array(self.epoch_predictions)
         targets = np.array(self.epoch_targets)
 
+        # Metriche per classe
+        precision_per_class = precision_score(targets, predictions, average=None, zero_division=0)
+        recall_per_class = recall_score(targets, predictions, average=None, zero_division=0)
+        f1_per_class = f1_score(targets, predictions, average=None, zero_division=0)
+
         # Calcola metriche
         metrics = {'loss': np.mean(self.epoch_losses) if self.epoch_losses else 0.0,
                    'accuracy': accuracy_score(targets, predictions),
                    'precision': precision_score(targets, predictions, average='binary', zero_division=0),
                    'recall': recall_score(targets, predictions, average='binary', zero_division=0),
                    'f1': f1_score(targets, predictions, average='binary', zero_division=0),
-                   'confusion_matrix': confusion_matrix(targets, predictions)}
-
-        # Metriche per classe
-        precision_per_class = precision_score(targets, predictions, average=None, zero_division=0)
-        recall_per_class = recall_score(targets, predictions, average=None, zero_division=0)
-        f1_per_class = f1_score(targets, predictions, average=None, zero_division=0)
-
-        metrics['per_class'] = {
-            'precision': precision_per_class.tolist(),
-            'recall': recall_per_class.tolist(),
-            'f1': f1_per_class.tolist()
+                   'confusion_matrix': confusion_matrix(targets, predictions),
+                   'per_class': {
+                            'precision': precision_per_class.tolist(),
+                            'recall': recall_per_class.tolist(),
+                            'f1': f1_per_class.tolist()
+                   },
+                   'num_samples': len(predictions)
         }
+
+        if learning_rate is not None:
+            metrics['learning_rate'] = learning_rate
+        if epoch_duration is not None:
+            metrics['epoch_duration_seconds'] = epoch_duration
 
         # ROC-AUC se abbiamo probabilità
         if self.epoch_probabilities:
@@ -153,6 +161,11 @@ class MetricsTracker:
         print(f"  Recall:    {metrics_train['recall']:.4f}")
         print(f"  F1 Score:  {metrics_train['f1']:.4f}")
 
+        if 'epoch_duration_seconds' in metrics_train:
+            print(f"  Duration:  {metrics_train['epoch_duration_seconds']:.1f}s")
+        if 'learning_rate' in metrics_train:
+            print(f"  LR:        {metrics_train['learning_rate']:.6f}")
+
         # Validation metrics
         if metrics_val:
             print(f"\n📊 VALIDATION:")
@@ -164,12 +177,14 @@ class MetricsTracker:
 
             if 'roc_auc' in metrics_val:
                 print(f"  ROC-AUC:   {metrics_val['roc_auc']:.4f}")
+            if 'epoch_duration_seconds' in metrics_val:
+                print(f"  Duration:  {metrics_val['epoch_duration_seconds']:.1f}s")
 
             print(f"\n🏆 Best Val F1: {self.best_val_f1:.4f} (Epoch {self.best_epoch + 1})")
 
         print(f"{'=' * 70}\n")
 
-    def save_metrics(self, save_dir, filename='metrics_history.json'):
+    def save_metrics(self, save_dir, filename='metrics_history.json', extra_info=None):
         """Salva la metric history in uno JSON"""
         save_path = Path(save_dir) / filename
         save_path.parent.mkdir(parents=True, exist_ok=True)
@@ -181,6 +196,9 @@ class MetricsTracker:
             'best_epoch': int(self.best_epoch),
             'timestamp': datetime.now().isoformat()
         }
+
+        if extra_info is not None:
+            metrics_dict.update(extra_info)
 
         with open(save_path, 'w') as f:
             json.dump(metrics_dict, f, indent=2)

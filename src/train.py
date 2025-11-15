@@ -10,7 +10,7 @@ from pathlib import Path
 from tqdm import tqdm
 import time
 from datetime import datetime
-
+import json
 from src.model import build_model
 from src.metrics import MetricsTracker, MetricsVisualizer
 
@@ -163,6 +163,8 @@ class Trainer:
         self.model.train()
         self.metrics_tracker.reset_epoch()
 
+        epoch_start_time = time.time()
+
         # Progress bar
         pbar = tqdm(self.train_loader, desc=f"Epoch {self.current_epoch + 1} [TRAIN]")
 
@@ -211,8 +213,14 @@ class Trainer:
 
             self.global_step += 1
 
+        epoch_duration = time.time() - epoch_start_time
+        current_lr = self.optimizer.param_groups[0]['lr']
+
         # Compute epoch metrics
-        metrics = self.metrics_tracker.compute_epoch_metrics('train')
+        metrics = self.metrics_tracker.compute_epoch_metrics(
+            phase='train',
+            learning_rate=current_lr,
+            epoch_duration=epoch_duration)
 
         return metrics
 
@@ -225,6 +233,7 @@ class Trainer:
         self.model.eval()
         self.metrics_tracker.reset_epoch()
 
+        epoch_start_time = time.time()
         # Progress bar
         pbar = tqdm(self.val_loader, desc=f"Epoch {self.current_epoch + 1} [VAL]")
 
@@ -258,8 +267,13 @@ class Trainer:
                 'acc': f"{(predictions == labels).float().mean().item():.4f}"
             })
 
+        epoch_duration = time.time() - epoch_start_time
+
         # Compute epoch metrics
-        metrics = self.metrics_tracker.compute_epoch_metrics('val')
+        metrics = self.metrics_tracker.compute_epoch_metrics(
+            phase='val',
+            epoch_duration=epoch_duration
+        )
 
         return metrics
 
@@ -368,10 +382,14 @@ class Trainer:
         print("=" * 70 + "\n")
 
         # Salva metriche e genera grafici
-        self._save_final_results()
+        self._save_final_results(total_training_time=elapsed_time)
 
-    def _save_final_results(self):
-        """Salva risultati finali e genera grafici"""
+    def _save_final_results(self, total_training_time):
+        """Salva risultati finali e genera grafici
+
+        Args:
+            total_training_time: Tempo totale training in secondi
+        """
         print("\n" + "=" * 70)
         print("SALVATAGGIO RISULTATI FINALI")
         print("=" * 70 + "\n")
@@ -381,8 +399,37 @@ class Trainer:
         results_subdir = self.results_dir / f"run_{timestamp}"
         results_subdir.mkdir(parents=True, exist_ok=True)
 
+        extra_training_info = {
+            'total_training_time_seconds': total_training_time,
+            'total_training_time_hours': total_training_time / 3600,
+            'average_epoch_time_seconds': total_training_time / (self.current_epoch + 1),
+
+            # Hyperparameters usati
+            'hyperparameters': {
+                'batch_size': self.config['training']['batch_size'],
+                'learning_rate': self.config['training']['learning_rate'],
+                'optimizer': self.config['training']['optimizer'],
+                'weight_decay': self.config.get('training.weight_decay', 0),
+                'scheduler_type': self.config.get('training.scheduler.type'),
+                'early_stopping_patience': self.config.get('training.early_stopping.patience', None),
+                'max_frames': self.config.get('preprocessing.max_frames', 50),
+                'num_epochs': self.config['training']['num_epochs']
+            },
+
+            # Info dataset
+            'dataset_info': {
+                'num_train_samples': len(self.train_loader.dataset),
+                'num_val_samples': len(self.val_loader.dataset) if self.val_loader else 0,
+                'fold_used': self.config.get('dataset.fold_idx', 1)
+            }
+        }
+
+
         # Salva metrics history
-        self.metrics_tracker.save_metrics(results_subdir)
+        self.metrics_tracker.save_metrics(
+            save_dir=results_subdir,
+            filename='training_metrics_summary.json',
+            extra_info=extra_training_info)
 
         # Genera classification report
         self.metrics_tracker.generate_classification_report(results_subdir)
@@ -395,7 +442,6 @@ class Trainer:
         )
 
         print(f"\n📁 Tutti i risultati salvati in: {results_subdir.resolve()}")
-        print("\n✅ Pronto per la tesi! 🎓")
 
 
 class EarlyStopping:
