@@ -215,6 +215,7 @@ def test_with_real_batch(config, use_subject_split=False, use_dolos_fold=False):
     print(f"  Clip names: {metadata['clip_names']}")
     if openface is not None:
         print(f"  OpenFace shape: {openface.shape}")
+        openface = openface.to(device)
     else:
         print(f"  OpenFace: None")
 

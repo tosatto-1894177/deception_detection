@@ -25,7 +25,8 @@ class OpenFaceLoader:
                  use_aus: bool = True,
                  use_gaze: bool = True,
                  use_pose: bool = True,
-                 normalize: bool = True):
+                 normalize: bool = True,
+                 verbose: bool = True):
         """
         Args:
             csv_dir: Cartella con i CSV OpenFace
@@ -33,6 +34,7 @@ class OpenFaceLoader:
             use_gaze: Se True, carica Gaze (8 features)
             use_pose: Se True, carica Pose (6 features)
             normalize: Se True, applica z-score normalization
+            verbose: per gestire i print
         """
         self.csv_dir = Path(csv_dir)
         self.use_aus = use_aus
@@ -52,12 +54,13 @@ class OpenFaceLoader:
         # Dimensione totale features
         self.feature_dim = self._compute_feature_dim()
 
-        print(f"OpenFaceLoader inizializzato:")
-        print(f"  AUs:   {use_aus} ({'35 features' if use_aus else '0 features'})")
-        print(f"  Gaze:  {use_gaze} ({'8 features' if use_gaze else '0 features'})")
-        print(f"  Pose:  {use_pose} ({'6 features' if use_pose else '0 features'})")
-        print(f"  Total: {self.feature_dim} features")
-        print(f"  Normalize: {normalize}")
+        if verbose:
+            print(f"OpenFaceLoader inizializzato:")
+            print(f"  AUs:   {use_aus} ({'35 features' if use_aus else '0 features'})")
+            print(f"  Gaze:  {use_gaze} ({'8 features' if use_gaze else '0 features'})")
+            print(f"  Pose:  {use_pose} ({'6 features' if use_pose else '0 features'})")
+            print(f"  Total: {self.feature_dim} features")
+            print(f"  Normalize: {normalize}")
 
     def _define_feature_columns(self):
         """Definisce quali colonne estrarre dal CSV OpenFace"""
