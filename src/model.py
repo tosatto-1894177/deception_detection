@@ -332,6 +332,232 @@ class DcDtModel(nn.Module):
         return predictions, probabilities
 
 
+class OpenFaceBranch(nn.Module):
+    """
+    Branch dedicato per processare le features OpenFace features
+
+    Architettura:
+    Input (B, T, 49) → MLP Encoder → TCN → Attention → Context (B, 128)
+    """
+
+    def __init__(self, input_dim=49, hidden_dim=128, tcn_channels=None,
+                 kernel_size=3, dropout=0.2):
+        """
+        Args:
+            input_dim: Dimensione input OpenFace (default 49)
+            hidden_dim: Dimensione hidden layer (default 128)
+            tcn_channels: Lista canali TCN (default [128])
+            kernel_size: Kernel size per TCN
+            dropout: Dropout rate
+        """
+        super().__init__()
+
+        if tcn_channels is None:
+            tcn_channels = [hidden_dim]
+
+        # 1. MLP Encoder: normalizza e proietta le features OpenFace
+        self.encoder = nn.Sequential(
+            nn.Linear(input_dim, hidden_dim),
+            nn.LayerNorm(hidden_dim),
+            nn.ReLU(),
+            nn.Dropout(dropout)
+        )
+
+        # 2. TCN: cattura dinamiche temporali
+        self.tcn = TemporalConvNet(
+            input_dim=hidden_dim,
+            hidden_channels=tcn_channels,
+            kernel_size=kernel_size,
+            dropout=dropout
+        )
+
+        # 3. Attention: aggrega frame temporali
+        self.attention = TemporalAttention(
+            input_dim=tcn_channels[-1],
+            hidden_dim=64
+        )
+
+        self.output_dim = tcn_channels[-1]
+
+    def forward(self, openface_features, mask=None):
+        """
+        Forward pass del branch OpenFace
+
+        Args:
+            openface_features: (batch, seq_len, input_dim)
+            mask: (batch, seq_len) - True per frame reali
+
+        Returns:
+            context: (batch, output_dim) - Context vector aggregato
+            attention_weights: (batch, seq_len) - Pesi attention
+        """
+        # 1. Encode features con MLP: (B, T, 49) → (B, T, hidden_dim)
+        x = self.encoder(openface_features)
+
+        # 2. Modeling temporale con TCN: (B, T, hidden_dim) → (B, T, output_dim)
+        x = self.tcn(x, mask)
+
+        # 3. Aggrega con Attention: (B, T, output_dim) → (B, output_dim)
+        context, attention_weights = self.attention(x, mask)
+
+        return context, attention_weights
+
+
+class DcDtModelV2(nn.Module):
+    """
+    Modello Multimodale con Late Fusion
+
+    Combina due modalità:
+    1. VIDEO: Frames → ResNet → TCN → Attention → (B, 256)
+    2. OPENFACE: AUs/Gaze/Pose → MLP → TCN → Attention → (B, 128)
+
+    Late Fusion: Concatena i context vectors → MLP → Prediction
+    """
+
+    def __init__(self, config):
+        """
+        Args:
+            config: config.yaml
+        """
+        super().__init__()
+
+        self.config = config
+
+        # Branch video
+        self.video_feature_extractor = ResNetFeatureExtractor(
+            architecture=config.get('model.resnet.architecture'),
+            pretrained=config.get('model.resnet.pretrained'),
+            freeze=config.get('model.resnet.freeze_layers')
+        )
+        video_feature_dim = self.video_feature_extractor.feature_dim
+
+        self.video_tcn = TemporalConvNet(
+            input_dim=video_feature_dim,
+            hidden_channels=config.get('model.tcn.hidden_channels'),
+            kernel_size=config.get('model.tcn.kernel_size'),
+            dropout=config.get('model.tcn.dropout')
+        )
+        video_tcn_output_dim = self.video_tcn.output_dim
+
+        self.video_attention = TemporalAttention(
+            input_dim=video_tcn_output_dim,
+            hidden_dim=config.get('model.attention.hidden_dim')
+        )
+
+        # Branch Openface
+        openface_config = config.get('model.openface', {})
+        openface_input_dim = openface_config.get('input_dim', 49)
+        openface_hidden_dim = openface_config.get('hidden_dim', 128)
+        openface_tcn_channels = openface_config.get('tcn_channels', [128])
+
+        self.openface_branch = OpenFaceBranch(
+            input_dim=openface_input_dim,
+            hidden_dim=openface_hidden_dim,
+            tcn_channels=openface_tcn_channels,
+            kernel_size=config.get('model.tcn.kernel_size', 3),
+            dropout=config.get('model.tcn.dropout', 0.2)
+        )
+
+        # Fusion layer -> Late fusion
+        fusion_input_dim = video_tcn_output_dim + self.openface_branch.output_dim
+        fusion_hidden_dims = config.get('model.fusion.hidden_dims', [256, 128])
+
+        # Classificatore finale
+        self.fusion_classifier = MLPClassifier(
+            input_dim=fusion_input_dim,
+            hidden_dims=fusion_hidden_dims,
+            num_classes=config.get('model.classifier.num_classes', 2),
+            dropout=config.get('model.classifier.dropout', 0.3)
+        )
+
+        print(f"\n{'=' * 80}")
+        print("LATE FUSION MODEL")
+        print(f"{'=' * 80}")
+        print(f"Video context dim:    {video_tcn_output_dim}")
+        print(f"OpenFace context dim: {self.openface_branch.output_dim}")
+        print(f"Fused dim:            {fusion_input_dim}")
+        print(f"{'=' * 80}\n")
+
+    def forward(self, frames, mask=None, openface_features=None):
+        """
+        Forward pass multimodale
+
+        Args:
+            frames: (batch, seq_len, C, H, W) - Video frames
+            mask: (batch, seq_len) - Mask per padding
+            openface_features: (batch, seq_len, 49) - OpenFace features (opzionale)
+
+        Returns:
+            logits: (batch, num_classes) - Predizioni
+            attention_dict: dict con attention weights da entrambi i branch
+        """
+        batch_size, seq_len, C, H, W = frames.shape
+
+        # Branch video
+
+        # 1. Estrae feature visive con ResNet
+        frames_flat = frames.view(batch_size * seq_len, C, H, W)
+        video_features = self.video_feature_extractor(frames_flat)
+        video_features = video_features.view(batch_size, seq_len, -1)
+
+        # 2. Modeling temporale con TCN
+        video_tcn_out = self.video_tcn(video_features, mask)
+
+        # 3. Aggrega con Attention
+        video_context, video_attention = self.video_attention(video_tcn_out, mask)
+
+        # Branch Openface
+        if openface_features is not None:
+            # Processa features OpenFace
+            openface_context, openface_attention = self.openface_branch(
+                openface_features, mask
+            )
+        else:
+            # Fallback: se OpenFace manca, usa zeros
+            # (permette di gestire clip senza OpenFace features)
+            openface_context = torch.zeros(
+                batch_size,
+                self.openface_branch.output_dim,
+                device=frames.device
+            )
+            openface_attention = torch.zeros(batch_size, seq_len, device=frames.device)
+
+        # ===== LATE FUSION =====
+
+        # Concatena context vectors: (B, 256) + (B, 128) → (B, 384)
+        fused_context = torch.cat([video_context, openface_context], dim=1)
+
+        # Classificazione finale
+        logits = self.fusion_classifier(fused_context)
+
+        # Ritorna attention weights per entrambi i branch (utile per analisi)
+        attention_dict = {
+            'video': video_attention,
+            'openface': openface_attention
+        }
+
+        return logits, attention_dict
+
+    def predict(self, frames, mask=None, openface_features=None):
+        """
+        Predizione con probabilità
+
+        Args:
+            frames: (batch, seq_len, C, H, W)
+            mask: (batch, seq_len)
+            openface_features: (batch, seq_len, 49)
+
+        Returns:
+            predictions: (batch,) - Classe predetta
+            probabilities: (batch, num_classes) - Probabilità
+        """
+        logits, _ = self.forward(frames, mask, openface_features)
+        probabilities = F.softmax(logits, dim=1)
+        predictions = torch.argmax(probabilities, dim=1)
+
+        return predictions, probabilities
+
+
 def build_model(config):
     """
     Factory function per costruire il modello
@@ -340,10 +566,20 @@ def build_model(config):
         config: config.yaml
 
     Returns:
-        model: DcDtModel
+        model: DcDtModel o DcDtModelV2 (con late fusion)
         device: torch.device
     """
-    model = DcDtModel(config)
+    model_type = config.get('model.type', 'video_only')
+
+    if model_type == 'multimodal':
+        print("\nCostruendo modello multimodale (video + OpenFace)")
+        model = DcDtModelV2(config)
+    elif model_type == 'video_only':
+        print("\nCostruendo modello VIDEO-ONLY")
+        model = DcDtModel(config)
+    else:
+        raise ValueError(f"Model type '{model_type}' non supportato. "
+                         f"Usa 'video_only' o 'multimodal'")
 
     device = torch.device(config['training']['device'])
     model = model.to(device)
@@ -352,13 +588,14 @@ def build_model(config):
     total_params = sum(p.numel() for p in model.parameters())
     trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
 
-    print(f"\n{'=' * 70}")
+    print(f"\n{'=' * 80}")
     print("MODELLO COSTRUITO")
-    print(f"{'=' * 70}")
+    print(f"{'=' * 80}")
+    print(f"Tipo: {model_type.upper()}")
     print(f"Architettura: {config.get('model.resnet.architecture')} → TCN → Attention → MLP")
     print(f"Parametri totali: {total_params:,}")
     print(f"Parametri trainable: {trainable_params:,}")
     print(f"Device: {device}")
-    print(f"{'=' * 70}\n")
+    print(f"{'=' * 80}\n")
 
     return model, device

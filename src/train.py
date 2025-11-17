@@ -10,14 +10,13 @@ from pathlib import Path
 from tqdm import tqdm
 import time
 from datetime import datetime
-
 from src.model import build_model
 from src.metrics import MetricsTracker, MetricsVisualizer
 
 
 class Trainer:
     """
-    Trainer completo per DcDtModel
+    Trainer completo per DcDtModel e DcDtModelV2
     Gestisce training, validation, early stopping, checkpointing
     """
 
@@ -39,6 +38,8 @@ class Trainer:
 
         # Modello
         self.model, _ = build_model(config)
+        # Determina se il modello è multimodale
+        self.is_multimodal = config.get('model.type', 'video_only') == 'multimodal'
 
         # Loss function
         self.criterion = self._setup_loss()
@@ -98,7 +99,7 @@ class Trainer:
 
     def _setup_optimizer(self):
         """Setta l'optimizer che si occupa di aggiornare i pesi"""
-        opt_name = self.config.get('training.optimizer', 'adam').lower()
+        opt_name = self.config.get('training.optimizer', 'adamw').lower()
         lr = self.config['training']['learning_rate']
 
 
@@ -149,7 +150,7 @@ class Trainer:
             patience = scheduler_config.get('patience', 5)
             scheduler = optim.lr_scheduler.ReduceLROnPlateau(
                 self.optimizer, mode='max', factor=0.5,
-                patience=patience, verbose=True
+                patience=patience
             )
             print(f"LR Scheduler: ReduceLROnPlateau (patience={patience})")
 
@@ -163,17 +164,32 @@ class Trainer:
         self.model.train()
         self.metrics_tracker.reset_epoch()
 
+        epoch_start_time = time.time()
+
         # Progress bar
         pbar = tqdm(self.train_loader, desc=f"Epoch {self.current_epoch + 1} [TRAIN]")
 
-        for batch_idx, (frames, labels, lengths, mask, metadata) in enumerate(pbar):
+        for batch_idx, batch_data in enumerate(pbar):
+            # Unpack batch - gestisce sia 5 che 6 elementi (unimodale vs multimodale)
+            if len(batch_data) == 6:
+                frames, labels, lengths, mask, metadata, openface = batch_data
+            else:
+                frames, labels, lengths, mask, metadata = batch_data
+                openface = None
+
             # Muove su device
             frames = frames.to(self.device)
             labels = labels.to(self.device)
             mask = mask.to(self.device)
+            if openface is not None:
+                openface = openface.to(self.device)
 
-            # Forward pass
-            logits, attention_weights = self.model(frames, mask)
+            # Forward pass - diverso per multimodal vs video-only
+            if self.is_multimodal:
+                logits, attention_dict = self.model(frames, mask, openface)
+                attention_weights = attention_dict['video']  # Usa video attention per stats
+            else:
+                logits, attention_weights = self.model(frames, mask)
 
             # Calcola loss
             loss = self.criterion(logits, labels)
@@ -211,8 +227,14 @@ class Trainer:
 
             self.global_step += 1
 
+        epoch_duration = time.time() - epoch_start_time
+        current_lr = self.optimizer.param_groups[0]['lr']
+
         # Compute epoch metrics
-        metrics = self.metrics_tracker.compute_epoch_metrics('train')
+        metrics = self.metrics_tracker.compute_epoch_metrics(
+            phase='train',
+            learning_rate=current_lr,
+            epoch_duration=epoch_duration)
 
         return metrics
 
@@ -225,17 +247,31 @@ class Trainer:
         self.model.eval()
         self.metrics_tracker.reset_epoch()
 
+        epoch_start_time = time.time()
         # Progress bar
         pbar = tqdm(self.val_loader, desc=f"Epoch {self.current_epoch + 1} [VAL]")
 
-        for frames, labels, lengths, mask, metadata in pbar:
+        for batch_data in pbar:
+            # Unpack batch - gestisce sia 5 che 6 elementi
+            if len(batch_data) == 6:
+                frames, labels, lengths, mask, metadata, openface = batch_data
+            else:
+                frames, labels, lengths, mask, metadata = batch_data
+                openface = None
+
             # Muove su device
             frames = frames.to(self.device)
             labels = labels.to(self.device)
             mask = mask.to(self.device)
+            if openface is not None:
+                openface = openface.to(self.device)
 
             # Forward pass
-            logits, attention_weights = self.model(frames, mask)
+            if self.is_multimodal:
+                logits, attention_dict = self.model(frames, mask, openface)
+                attention_weights = attention_dict['video']
+            else:
+                logits, attention_weights = self.model(frames, mask)
 
             # Loss
             loss = self.criterion(logits, labels)
@@ -258,8 +294,13 @@ class Trainer:
                 'acc': f"{(predictions == labels).float().mean().item():.4f}"
             })
 
+        epoch_duration = time.time() - epoch_start_time
+
         # Compute epoch metrics
-        metrics = self.metrics_tracker.compute_epoch_metrics('val')
+        metrics = self.metrics_tracker.compute_epoch_metrics(
+            phase='val',
+            epoch_duration=epoch_duration
+        )
 
         return metrics
 
@@ -305,14 +346,15 @@ class Trainer:
         """
         num_epochs = num_epochs or self.config['training']['num_epochs']
 
-        print("\n" + "=" * 70)
+        print("\n" + "=" * 80)
         print("INIZIO TRAINING")
-        print("=" * 70)
+        print("=" * 80)
         print(f"Epochs: {num_epochs}")
         print(f"Train batches: {len(self.train_loader)}")
         if self.val_loader:
             print(f"Val batches: {len(self.val_loader)}")
-        print("=" * 70 + "\n")
+        print(f"Multimodal: {self.is_multimodal}")
+        print("=" * 80 + "\n")
 
         start_time = time.time()
 
@@ -353,36 +395,69 @@ class Trainer:
                 self.early_stopping(metrics_val['f1'])
 
                 if self.early_stopping.should_stop:
-                    print(f"\n⚠️  Early stopping triggered at epoch {epoch + 1}")
-                    print(f"   No improvement for {self.early_stopping.patience} epochs")
+                    print(f"\n  Early stopping triggered all'epoch {epoch + 1}")
+                    print(f" Nessun miglioramento per {self.early_stopping.patience} epochs")
                     break
 
         # Training completato
         elapsed_time = time.time() - start_time
 
-        print("\n" + "=" * 70)
+        print("\n" + "=" * 80)
         print("✅ TRAINING COMPLETATO!")
-        print("=" * 70)
+        print("=" * 80)
         print(f"Tempo totale: {elapsed_time / 3600:.2f} ore")
         print(f"Miglior valore F1: {self.best_val_f1:.4f}")
-        print("=" * 70 + "\n")
+        print("=" * 80 + "\n")
 
         # Salva metriche e genera grafici
-        self._save_final_results()
+        self._save_final_results(total_training_time=elapsed_time)
 
-    def _save_final_results(self):
-        """Salva risultati finali e genera grafici"""
-        print("\n" + "=" * 70)
+    def _save_final_results(self, total_training_time):
+        """Salva risultati finali e genera grafici
+
+        Args:
+            total_training_time: Tempo totale training in secondi
+        """
+        print("\n" + "=" * 80)
         print("SALVATAGGIO RISULTATI FINALI")
-        print("=" * 70 + "\n")
+        print("=" * 80 + "\n")
 
         # Timestamp per organizzare i risultati
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         results_subdir = self.results_dir / f"run_{timestamp}"
         results_subdir.mkdir(parents=True, exist_ok=True)
 
+        extra_training_info = {
+            'total_training_time_seconds': total_training_time,
+            'total_training_time_hours': total_training_time / 3600,
+            'average_epoch_time_seconds': total_training_time / (self.current_epoch + 1),
+
+            # Hyperparameters usati
+            'hyperparameters': {
+                'batch_size': self.config['training']['batch_size'],
+                'learning_rate': self.config['training']['learning_rate'],
+                'optimizer': self.config['training']['optimizer'],
+                'weight_decay': self.config.get('training.weight_decay', 0),
+                'scheduler_type': self.config.get('training.scheduler.type'),
+                'early_stopping_patience': self.config.get('training.early_stopping.patience', None),
+                'max_frames': self.config.get('preprocessing.max_frames', 50),
+                'num_epochs': self.config['training']['num_epochs']
+            },
+
+            # Info dataset
+            'dataset_info': {
+                'num_train_samples': len(self.train_loader.dataset),
+                'num_val_samples': len(self.val_loader.dataset) if self.val_loader else 0,
+                'fold_used': self.config.get('dataset.fold_idx', 1)
+            }
+        }
+
+
         # Salva metrics history
-        self.metrics_tracker.save_metrics(results_subdir)
+        self.metrics_tracker.save_metrics(
+            save_dir=results_subdir,
+            filename='training_metrics_summary.json',
+            extra_info=extra_training_info)
 
         # Genera classification report
         self.metrics_tracker.generate_classification_report(results_subdir)
@@ -395,7 +470,6 @@ class Trainer:
         )
 
         print(f"\n📁 Tutti i risultati salvati in: {results_subdir.resolve()}")
-        print("\n✅ Pronto per la tesi! 🎓")
 
 
 class EarlyStopping:
@@ -421,7 +495,7 @@ class EarlyStopping:
         Aggiorna stato early stopping
 
         Args:
-            score: Metrica da monitorare (es. val_f1)
+            score: Metrica da monitorare
         """
         if not self.enabled:
             return
