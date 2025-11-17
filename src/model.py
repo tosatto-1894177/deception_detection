@@ -525,7 +525,7 @@ class DcDtModelV2(nn.Module):
             )
             openface_attention = torch.zeros(batch_size, seq_len, device=frames.device)
 
-        # ===== LATE FUSION =====
+        # LATE FUSION
 
         # Concatena context vectors: (B, 256) + (B, 128) → (B, 384)
         fused_context = torch.cat([video_context, openface_context], dim=1)

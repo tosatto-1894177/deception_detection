@@ -411,8 +411,18 @@ def test(config, use_dolos_fold=False):
         use_dolos_fold: Se True, usa test fold DOLOS
     """
 
-    # 1. Verifica che esista best model salvato
-    best_model_path = Path(config.get('paths.models_dir')) / 'best_model.pth'
+    # 1. Trova l'ultima run di training e carica il best model
+    models_dir = Path(config.get('paths.models_dir'))
+    run_dirs = sorted(models_dir.glob('multimodal_run_*'))
+
+    if not run_dirs:
+        print(f"\n Nessuna cartella di training trovata in: {models_dir}")
+        print("   Esegui prima il training con: python main.py --mode train --dolos_fold")
+        return
+
+    # Prende la più recente
+    latest_run = run_dirs[-1]
+    best_model_path = latest_run / 'best_model.pth'
 
     if not best_model_path.exists():
         print(f"❌ Modello migliore non trovato: {best_model_path}")
