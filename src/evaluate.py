@@ -28,7 +28,7 @@ class Evaluator:
     def __init__(self, model, config, test_loader, device=None, save_results=True):
         """
         Args:
-            model: Modello addestrato (DcDtModel)
+            model: Modello addestrato (DcDtModel o DcDtModelV2)
             config: config.yaml
             test_loader: DataLoader test set
             device: device
@@ -40,6 +40,9 @@ class Evaluator:
         self.test_loader = test_loader
         self.device = device or torch.device(config['training']['device'])
         self.save_results = save_results
+
+        # Determina se il modello è multimodale
+        self.is_multimodal = config.get('model.type', 'video_only') == 'multimodal'
 
         # Metrics tracker
         self.metrics_tracker = MetricsTracker(
@@ -72,6 +75,7 @@ class Evaluator:
         print("ESECUZIONE TEST")
         print("=" * 80)
         print(f"Samples di test: {len(self.test_loader.dataset)}")
+        print(f"Multimodal: {self.is_multimodal}")
         if self.save_results:
             print(f"Cartella di output: {self.results_subdir}")
         print("=" * 80 + "\n")
@@ -87,16 +91,30 @@ class Evaluator:
         num_correct_saved = 0
         num_incorrect_saved = 0
         MAX_SAMPLES = 5
+        attention_complete = False
 
         # Inference loop
         with torch.no_grad():
-            for frames, labels, lengths, mask, metadata in tqdm(self.test_loader, desc="Testing"):
+            for batch_data in tqdm(self.test_loader, desc="Testing"):
+                # Unpack batch - gestisce sia 5 che 6 elementi
+                if len(batch_data) == 6:
+                    frames, labels, lengths, mask, metadata, openface = batch_data
+                else:
+                    frames, labels, lengths, mask, metadata = batch_data
+                    openface = None
+
                 frames = frames.to(self.device)
                 labels = labels.to(self.device)
                 mask = mask.to(self.device)
+                if openface is not None:
+                    openface = openface.to(self.device)
 
                 # Forward pass
-                logits, attention_weights = self.model(frames, mask)
+                if self.is_multimodal:
+                    logits, attention_dict = self.model(frames, mask, openface)
+                    attention_weights = attention_dict['video']  # Usa video attention
+                else:
+                    logits, attention_weights = self.model(frames, mask)
 
                 # Predictions
                 predictions = torch.argmax(logits, dim=1)

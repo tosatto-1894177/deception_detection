@@ -1,14 +1,17 @@
 """
-Creazione Dataset con split DOLOS o split subject-indipendent
+Creazione Dataset con split DOLOS
 """
 
 import torch
 import cv2
 import pandas as pd
 from pathlib import Path
-from torch.utils.data import Dataset, Subset
+from torch.utils.data import Dataset
 import torchvision.transforms as transforms
 import numpy as np
+import sys
+# sys.path.append(str(Path(__file__).parent.parent))  # Per importare da root
+from openface_loader import OpenFaceLoader
 
 
 class DOLOSDataset(Dataset):
@@ -21,20 +24,34 @@ class DOLOSDataset(Dataset):
     """
 
     def __init__(self, root_dir, annotation_file, transform=None, max_frames=50,
-                 use_behavioral_features=False, clip_filter=None):
+                 clip_filter=None, use_openface=False, openface_csv_dir=None):
         """
         Args:
             root_dir: Cartella dove sono contenuti i frame estratti dalle clip
             annotation_file: percorso dell'Excel che contiene le annotazioni MUMIN
             transform: funzione transform
             max_frames: Numero massimo di frame da caricare per ciascuna clip
-            use_behavioral_features: Se True, carica feature comportamentali
             clip_filter: Insieme delle clip da includere (per splits)
+            use_openface: se True carica anche le feature Openface
+            openface_csv_dir: Cartella dove sono contenuti i csv con le feature Openface
         """
         self.root_dir = Path(root_dir)
         self.transform = transform or self.get_default_transform()
         self.max_frames = max_frames
-        self.use_behavioral_features = use_behavioral_features
+        self.use_openface = use_openface
+
+        self.openface_loader = None
+        if use_openface:
+            if openface_csv_dir is None:
+                raise ValueError("openface_csv_dir deve essere specificato se use_openface=True")
+
+            self.openface_loader = OpenFaceLoader(
+                csv_dir=openface_csv_dir,
+                use_aus=True,
+                use_gaze=True,
+                use_pose=True,
+                normalize=True
+            )
 
         # Carica annotazioni Mumin
         self.annotations = self._load_annotations(annotation_file)
@@ -60,8 +77,7 @@ class DOLOSDataset(Dataset):
                             'clip_name': clip_name,
                             'num_frames': len(frames),
                             'label': label_info['label'],
-                            'gender': label_info.get('gender', 'Unknown'),
-                            'behavioral_features': label_info.get('features', None)
+                            'gender': label_info.get('gender', 'Unknown')
                         })
 
         if len(self.samples) == 0:
@@ -79,10 +95,10 @@ class DOLOSDataset(Dataset):
         print(f"\n")
 
     def _load_annotations(self, annotation_file):
-        """Carica annotazioni MUMIN da Excel"""
+        """Carica informazioni da Excel"""
         ann_path = Path(annotation_file)
         if not ann_path.exists():
-            raise FileNotFoundError(f"File con annotazioni MUMIN non trovato: {annotation_file}")
+            raise FileNotFoundError(f"File con annotazioni non trovato: {annotation_file}")
 
         # Leggi Excel
         df = pd.read_excel(ann_path, skiprows=2, engine='openpyxl')
@@ -95,16 +111,9 @@ class DOLOSDataset(Dataset):
             label = 0 if label_str.lower() == 'truth' else 1
             gender = row['Participants gender'].strip() if 'Participants gender' in row else 'Unknown'
 
-            # Al momento use_behavioral_feature = False
-            features = None
-            if self.use_behavioral_features:
-                feature_cols = df.columns[3:]
-                features = row[feature_cols].values.astype(float)
-
             annotations[clip_name] = {
                 'label': label,
-                'gender': gender,
-                'features': features
+                'gender': gender
             }
 
         print(f"✅ Caricate {len(annotations)} annotazioni")
@@ -170,7 +179,7 @@ class DOLOSDataset(Dataset):
         for frame_path in sampled_files:
             frame = cv2.imread(str(frame_path))
             if frame is None:
-                print(f"⚠️  Warning: impossibile leggere {frame_path}")
+                print(f"  Warning: impossibile leggere {frame_path}")
                 continue
 
             frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -185,13 +194,54 @@ class DOLOSDataset(Dataset):
 
         frames_tensor = torch.stack(frames)
 
+        openface_features = None
+        if self.use_openface and self.openface_loader is not None:
+            clip_name = sample['clip_name']
+            openface_features = self.openface_loader.load_and_preprocess(clip_name)
+
+            # Gestione frame mismatch
+            if openface_features is not None:
+                openface_features = self._align_openface_to_frames(
+                    openface_features,
+                    len(frames)
+                )
+
         return {
             'frames': frames_tensor,
             'label': label,
             'length': len(frames),
             'clip_name': sample['clip_name'],
-            'gender': sample['gender']
+            'gender': sample['gender'],
+            'openface_features': openface_features
         }
+
+    def _align_openface_to_frames(self, openface_features, num_frames):
+        """
+        Allinea numero frame OpenFace con numero frame video
+
+        Args:
+            openface_features: (T_of, feature_dim) tensor
+            num_frames: numero frame video caricati
+
+        Returns:
+            (num_frames, feature_dim) tensor allineato
+        """
+        T_of = openface_features.shape[0]
+
+        if T_of == num_frames:
+            # Già allineato
+            return openface_features
+
+        elif T_of < num_frames:
+            # OpenFace ha meno frame → padding con zeros
+            pad_size = num_frames - T_of
+            padding = torch.zeros(pad_size, openface_features.shape[1])
+            return torch.cat([openface_features, padding], dim=0)
+
+        else:
+            # OpenFace ha più frame → sampling uniforme
+            indices = torch.linspace(0, T_of - 1, num_frames).long()
+            return openface_features[indices]
 
 def collate_fn_with_padding(batch):
     """
@@ -199,7 +249,7 @@ def collate_fn_with_padding(batch):
 
     Args:
         batch: lista di dict, uno per ogni clip:
-        [{'frames': tensor(n, 3, 224, 224), 'label': 0/1, 'length': n, 'clip_name': 'NOME_EPX_lie/truth', 'gender': 'gender'},
+        [{'frames': tensor(n, 3, 224, 224), 'label': 0/1, 'length': n, 'clip_name': 'NOME_EPX_lie/truth', 'gender': 'gender', 'openface': feature_list[]},
             ...]
             dove n = numero di frame della clip
     """
@@ -210,6 +260,7 @@ def collate_fn_with_padding(batch):
     lengths = [item['length'] for item in batch]
     clip_names = [item['clip_name'] for item in batch]
     genders = [item['gender'] for item in batch]
+    openface_list = [item.get('openface_features', None) for item in batch]
 
     # Trova la lunghezza massima -> questa diventa la dimensione temporale del batch padded
     # Tutte le clip più corte verranno "allungate" a max_len
@@ -222,12 +273,22 @@ def collate_fn_with_padding(batch):
     # Alloca mask pieno di False
     mask = torch.zeros(batch_size, max_len, dtype=torch.bool)
 
+    # Alloca tensor per OpenFace features se presente
+    openface_features_padded = None
+    if openface_list[0] is not None:
+        feature_dim = openface_list[0].shape[1]
+        openface_features_padded = torch.zeros(batch_size, max_len, feature_dim)
+
     # Per ogni clip nel batch
     for i, (frames, length) in enumerate(zip(frames_list, lengths)):
         # Copia i frame della clip, il resto lascia zeri
         padded_frames[i, :length] = frames
         # Segna nella mask quali posizioni hanno dati reali (se False -> padding)
         mask[i, :length] = True
+
+        # Copia le features OpenFace se presenti
+        if openface_list[i] is not None:
+            openface_features_padded[i, :length] = openface_list[i]
 
     # Converte labels e lenghts in tensor
     labels = torch.tensor(labels, dtype=torch.long)
@@ -238,7 +299,7 @@ def collate_fn_with_padding(batch):
         'genders': genders
     }
 
-    return padded_frames, labels, lengths, mask, metadata
+    return padded_frames, labels, lengths, mask, metadata, openface_features_padded
 
 
 def load_dolos_fold(fold_path):
@@ -247,128 +308,17 @@ def load_dolos_fold(fold_path):
     if not fold_path.exists():
         raise FileNotFoundError(f"File CSV non trovato: {fold_path}")
 
-    # Legge il CSV composto da una riga così impostata: nome_clip,truth/deception,gender
+    # Legge il CSV composto da una riga così impostata: nome_clip, truth/deception, gender
     df = pd.read_csv(fold_path, header=None, names=['clip_name', 'label', 'gender'])
 
     clip_names = df['clip_name'].str.strip().tolist()
 
     return clip_names
 
-
-"""def create_subject_independent_split(frames_dir, annotation_file,
-                                     val_ratio=0.2, seed=42,
-                                     max_frames=50):
-    """"""
-       Crea split subject-independent
-
-       Args:
-           frames_dir: Directory con frame estratti
-           annotation_file: File annotazioni MUMIN
-           val_ratio: % di train da usare per validation
-           seed: Random seed
-           max_frames: numero massimo frame
-
-       Returns:
-           tuple: (train_dataset, val_dataset, test_dataset)
-       """"""
-    np.random.seed(seed)
-
-    print("\n" + "=" * 70)
-    print("CREATING SUBJECT-INDEPENDENT SPLIT")
-    print("=" * 70)
-
-    # Crea dataset completo
-    full_dataset = DOLOSDataset(
-        root_dir=frames_dir,
-        annotation_file=annotation_file,
-        clip_filter=None,
-        max_frames=max_frames
-    )
-
-    available_clips = set(s['clip_name'] for s in full_dataset.samples)
-
-    train_clips_available = [c for c in train_clips if c in available_clips]
-    test_clips_available = [c for c in test_clips if c in available_clips]
-
-    print(f"\nClip disponibili:")
-    print(f"  Train: {len(train_clips_available)}/{len(train_clips)}")
-    print(f"  Test:  {len(test_clips_available)}/{len(test_clips)}")
-
-    # Split train → train + val (per soggetto)
-    train_by_subject = {}
-    for clip in train_clips_available:
-        parts = clip.split('_')
-        subject_id = '_'.join(parts[:-1]) if len(parts) > 1 else clip
-
-        if subject_id not in train_by_subject:
-            train_by_subject[subject_id] = []
-        train_by_subject[subject_id].append(clip)
-
-    subjects = list(train_by_subject.keys())
-    n_subjects = len(subjects)
-    n_val_subjects = max(1, int(n_subjects * val_ratio))
-
-    print(f"\nSubject split:")
-    print(f"  Soggetti totali: {n_subjects}")
-    print(f"  Val subjects: {n_val_subjects}")
-    print(f"  Train subjects: {n_subjects - n_val_subjects}")
-
-    np.random.shuffle(subjects)
-    val_subjects = subjects[:n_val_subjects]
-    train_subjects = subjects[n_val_subjects:]
-
-    train_final = []
-    val_final = []
-
-    for subject in train_subjects:
-        train_final.extend(train_by_subject[subject])
-    for subject in val_subjects:
-        val_final.extend(train_by_subject[subject])
-
-    print(f"\nFinal split:")
-    print(f"  Train: {len(train_final)} clip")
-    print(f"  Val:   {len(val_final)} clip")
-    print(f"  Test:  {len(test_clips_available)} clip")
-
-    # Crea dataset con filtri + sampling
-    train_dataset = DOLOSDataset(
-        root_dir=frames_dir,
-        annotation_file=annotation_file,
-        clip_filter=set(train_final),
-        max_frames=max_frames
-    )
-
-    val_dataset = DOLOSDataset(
-        root_dir=frames_dir,
-        annotation_file=annotation_file,
-        clip_filter=set(val_final),
-        max_frames=max_frames
-    )
-
-    test_dataset = DOLOSDataset(
-        root_dir=frames_dir,
-        annotation_file=annotation_file,
-        clip_filter=set(test_clips_available),
-        max_frames=max_frames
-    )
-
-    # Verifica no overlap
-    train_set = set(s['clip_name'] for s in train_dataset.samples)
-    val_set = set(s['clip_name'] for s in val_dataset.samples)
-    test_set = set(s['clip_name'] for s in test_dataset.samples)
-
-    assert len(train_set & val_set) == 0
-    assert len(train_set & test_set) == 0
-    assert len(val_set & test_set) == 0
-
-    print(f"\n✅ Subject-independent split creato!")
-    print("=" * 70 + "\n")
-
-    return train_dataset, val_dataset, test_dataset"""
-
 def create_dolos_fold_split(frames_dir, annotation_file,
                             train_fold_path, test_fold_path,
-                            val_ratio=0.2, seed=42, max_frames=50):
+                            val_ratio=0.2, seed=42, max_frames=50,
+                            use_openface=False, openface_csv_dir=None):
     """
     Usa i fold DOLOS ufficiali - non supporta subject-independent split
 
@@ -382,6 +332,8 @@ def create_dolos_fold_split(frames_dir, annotation_file,
         val_ratio: % delle clip del fold train che verranno usate per validation
         seed: Random seed
         max_frames: Numero max di frame supportato per ciascuna clip
+        use_openface: se True carica anche le feature Openface
+        openface_csv_dir: Cartella dove sono contenuti i csv con le feature Openface
 
     Returns:
         (train_dataset, val_dataset, test_dataset)
@@ -404,7 +356,9 @@ def create_dolos_fold_split(frames_dir, annotation_file,
         root_dir=frames_dir,
         annotation_file=annotation_file,
         clip_filter=None,
-        max_frames=max_frames
+        max_frames=max_frames,
+        use_openface=use_openface, 
+        openface_csv_dir=openface_csv_dir
     )
 
     available_clips = set(s['clip_name'] for s in dataset.samples)
@@ -438,21 +392,27 @@ def create_dolos_fold_split(frames_dir, annotation_file,
         root_dir=frames_dir,
         annotation_file=annotation_file,
         clip_filter=set(train_final),
-        max_frames=max_frames
+        max_frames=max_frames,
+        use_openface=use_openface,
+        openface_csv_dir=openface_csv_dir
     )
 
     val_dataset = DOLOSDataset(
         root_dir=frames_dir,
         annotation_file=annotation_file,
         clip_filter=set(val_final),
-        max_frames=max_frames
+        max_frames=max_frames,
+        use_openface=use_openface,
+        openface_csv_dir=openface_csv_dir
     )
 
     test_dataset = DOLOSDataset(
         root_dir=frames_dir,
         annotation_file=annotation_file,
         clip_filter=set(test_clips_available),
-        max_frames=max_frames
+        max_frames=max_frames,
+        use_openface=use_openface,
+        openface_csv_dir=openface_csv_dir
     )
 
     print(f"\n✅ Creati Dataset con split DOLOS!")

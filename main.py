@@ -12,15 +12,11 @@ from src.config_loader import load_config
 from scripts.frame_extractor import process_dolos_with_faces
 from src.dataset import DOLOSDataset, collate_fn_with_padding, load_dolos_fold
 from src.train import train_model
-from datetime import datetime
 from src.model import build_model
 from torch.utils.data import Subset
 import numpy as np
-from src.metrics import MetricsTracker, MetricsVisualizer
-from tqdm import tqdm
-import json
-import pandas as pd
 from src.evaluate import evaluate_model
+from datetime import datetime
 
 # Ottimizzazione memoria GPU
 torch.backends.cudnn.benchmark = True
@@ -47,12 +43,12 @@ def parse_args():
                         help='Override device')
 
     # Subject split - se presente gestisce la creazione del dataset con subject split
-    parser.add_argument('--subject_split', action='store_true',
-                        help='Usa subject-independent split custom (per training finale)')
+    #parser.add_argument('--subject_split', action='store_true',
+    #                    help='Usa subject-independent split custom (per training finale)')
 
     # Split con fold DOLOS
     parser.add_argument('--dolos_fold', action='store_true',
-                        help='Usa fold DOLOS ufficiali (comparabile letteratura)')
+                        help='Usa fold DOLOS ufficiali')
 
     return parser.parse_args()
 
@@ -107,6 +103,9 @@ def create_dataloaders(config, use_subject_split=False, use_dolos_fold=False):
     batch_size = config['training']['batch_size']
     annotation_file = config.get('paths.train_annotations')
 
+    use_openface = config.get('dataset.use_openface', False)
+    openface_csv_dir = config.get('paths.openface_csv_dir') if use_openface else None
+
     if use_dolos_fold:
         # Usa fold DOLOS ufficiali
 
@@ -123,7 +122,9 @@ def create_dataloaders(config, use_subject_split=False, use_dolos_fold=False):
             test_fold_path=test_fold_path,
             val_ratio=config.get('dataset.val_ratio', 0.2),
             seed=config.get('dataset.seed', 42),
-            max_frames=50
+            max_frames=50,
+            use_openface=use_openface,
+            openface_csv_dir=openface_csv_dir
         )
 
     """elif use_subject_split:
@@ -198,13 +199,24 @@ def test_with_real_batch(config, use_subject_split=False, use_dolos_fold=False):
     model, device = build_model(config)
 
     print("\nCaricamento primo batch")
-    frames, labels, lengths, mask, metadata = next(iter(train_loader))
+    batch_data = next(iter(train_loader))
+
+    # Unpack - gestisce sia 5 che 6 elementi
+    if len(batch_data) == 6:
+        frames, labels, lengths, mask, metadata, openface = batch_data
+    else:
+        frames, labels, lengths, mask, metadata = batch_data
+        openface = None
 
     print(f"\nBatch info:")
     print(f"  Frames shape: {frames.shape}")
     print(f"  Labels: {labels}")
     print(f"  Lengths: {lengths}")
     print(f"  Clip names: {metadata['clip_names']}")
+    if openface is not None:
+        print(f"  OpenFace shape: {openface.shape}")
+    else:
+        print(f"  OpenFace: None")
 
     # Forward pass
     print("\nForward pass...")
@@ -213,7 +225,14 @@ def test_with_real_batch(config, use_subject_split=False, use_dolos_fold=False):
 
     model.eval()
     with torch.no_grad():
-        logits, attention_weights = model(frames, mask)
+        # Gestisce entrambi i tipi di modello
+        is_multimodal = config.get('model.type', 'video_only') == 'multimodal'
+
+        if is_multimodal:
+            logits, attention_dict = model(frames, mask, openface)
+            attention_weights = attention_dict['video']
+        else:
+            logits, attention_weights = model(frames, mask)
 
     print(f"\nOutput:")
     print(f"  Logits shape: {logits.shape}")
@@ -358,6 +377,11 @@ def train(config, use_subject_split=False, use_dolos_fold=False):
     print("TRAINING COMPLETO")
     print("="*80)
 
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    run_dir = Path(config.get('paths.models_dir')) / f"run_{timestamp}"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    config.update({'paths': {'models_dir': str(run_dir)}})
+
     # Crea dataloaders
     train_loader, val_loader, test_loader = create_dataloaders(config, use_subject_split, use_dolos_fold)
 
@@ -365,7 +389,7 @@ def train(config, use_subject_split=False, use_dolos_fold=False):
     trainer = train_model(config, train_loader, val_loader)
 
     # Salva modello finale
-    final_model_path = Path(config.get('paths.models_dir')) / 'final_model.pth'
+    final_model_path = run_dir / 'final_model.pth'
     torch.save({
         'model_state_dict': trainer.model.state_dict(),
         'config': config.to_dict(),
@@ -401,6 +425,9 @@ def test(config, use_dolos_fold=False):
     annotation_file = config.get('paths.train_annotations')
     max_frames = 50
 
+    use_openface = config.get('dataset.use_openface', False)
+    openface_csv_dir = config.get('paths.openface_csv_dir') if use_openface else None
+
     if use_dolos_fold:
         # Test fold DOLOS
         fold_idx = config.get('dataset.fold_idx', 1)
@@ -413,7 +440,9 @@ def test(config, use_dolos_fold=False):
             root_dir=frames_dir,
             annotation_file=annotation_file,
             clip_filter=None,
-            max_frames=max_frames
+            max_frames=max_frames,
+            use_openface=use_openface,
+            openface_csv_dir=openface_csv_dir
         )
 
         available_clips = set(s['clip_name'] for s in full_dataset.samples)
@@ -425,7 +454,9 @@ def test(config, use_dolos_fold=False):
             root_dir=frames_dir,
             annotation_file=annotation_file,
             clip_filter=set(test_clips_available),
-            max_frames=max_frames
+            max_frames=max_frames,
+            use_openface=use_openface,
+            openface_csv_dir=openface_csv_dir
         )
 
     # DataLoader
