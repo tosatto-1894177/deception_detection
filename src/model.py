@@ -508,6 +508,9 @@ class DcDtModelV2(nn.Module):
 
         # Branch Openface
         if openface_features is not None:
+            device = next(self.parameters()).device
+            if openface_features.device != device:
+                openface_features = openface_features.to(device)
             # Processa features OpenFace
             openface_context, openface_attention = self.openface_branch(
                 openface_features, mask

@@ -24,7 +24,7 @@ class DOLOSDataset(Dataset):
     """
 
     def __init__(self, root_dir, annotation_file, transform=None, max_frames=50,
-                 clip_filter=None, use_openface=False, openface_csv_dir=None):
+                 clip_filter=None, use_openface=False, openface_csv_dir=None, verbose=True):
         """
         Args:
             root_dir: Cartella dove sono contenuti i frame estratti dalle clip
@@ -34,6 +34,7 @@ class DOLOSDataset(Dataset):
             clip_filter: Insieme delle clip da includere (per splits)
             use_openface: se True carica anche le feature Openface
             openface_csv_dir: Cartella dove sono contenuti i csv con le feature Openface
+            verbose: per gestire i print
         """
         self.root_dir = Path(root_dir)
         self.transform = transform or self.get_default_transform()
@@ -54,7 +55,7 @@ class DOLOSDataset(Dataset):
             )
 
         # Carica annotazioni Mumin
-        self.annotations = self._load_annotations(annotation_file)
+        self.annotations = self._load_annotations(annotation_file, verbose=verbose)
 
         # Trova clip con frame
         self.samples = []
@@ -83,18 +84,19 @@ class DOLOSDataset(Dataset):
         if len(self.samples) == 0:
             raise ValueError(f"Nessuna clip trovata in {root_dir}")
 
-        print(f"Dataset caricato: {len(self.samples)} clips")
-        frame_counts = [s['num_frames'] for s in self.samples]
-        print(f"Frame per clip - min: {min(frame_counts)}, max: {max(frame_counts)}, "
-              f"media: {np.mean(frame_counts):.1f}")
+        if verbose:
+            print(f"Dataset caricato: {len(self.samples)} clips")
+            frame_counts = [s['num_frames'] for s in self.samples]
+            print(f"Frame per clip - min: {min(frame_counts)}, max: {max(frame_counts)}, "
+                  f"media: {np.mean(frame_counts):.1f}")
 
-        # Statistiche label
-        truth_count = sum(1 for s in self.samples if s['label'] == 0)
-        lie_count = sum(1 for s in self.samples if s['label'] == 1)
-        print(f"Label distribution - Truth: {truth_count}, Deception: {lie_count}")
-        print(f"\n")
+            # Statistiche label
+            truth_count = sum(1 for s in self.samples if s['label'] == 0)
+            lie_count = sum(1 for s in self.samples if s['label'] == 1)
+            print(f"Label distribution - Truth: {truth_count}, Deception: {lie_count}")
+            print(f"\n")
 
-    def _load_annotations(self, annotation_file):
+    def _load_annotations(self, annotation_file, verbose=True):
         """Carica informazioni da Excel"""
         ann_path = Path(annotation_file)
         if not ann_path.exists():
@@ -116,7 +118,8 @@ class DOLOSDataset(Dataset):
                 'gender': gender
             }
 
-        print(f"✅ Caricate {len(annotations)} annotazioni")
+        if verbose:
+            print(f"✅ Caricate {len(annotations)} annotazioni")
         return annotations
 
     def _get_label_from_annotations(self, clip_name):
@@ -358,7 +361,8 @@ def create_dolos_fold_split(frames_dir, annotation_file,
         clip_filter=None,
         max_frames=max_frames,
         use_openface=use_openface, 
-        openface_csv_dir=openface_csv_dir
+        openface_csv_dir=openface_csv_dir,
+        verbose=False
     )
 
     available_clips = set(s['clip_name'] for s in dataset.samples)
@@ -394,7 +398,8 @@ def create_dolos_fold_split(frames_dir, annotation_file,
         clip_filter=set(train_final),
         max_frames=max_frames,
         use_openface=use_openface,
-        openface_csv_dir=openface_csv_dir
+        openface_csv_dir=openface_csv_dir,
+        verbose=True
     )
 
     val_dataset = DOLOSDataset(
@@ -403,7 +408,8 @@ def create_dolos_fold_split(frames_dir, annotation_file,
         clip_filter=set(val_final),
         max_frames=max_frames,
         use_openface=use_openface,
-        openface_csv_dir=openface_csv_dir
+        openface_csv_dir=openface_csv_dir,
+        verbose=True
     )
 
     test_dataset = DOLOSDataset(
@@ -412,10 +418,11 @@ def create_dolos_fold_split(frames_dir, annotation_file,
         clip_filter=set(test_clips_available),
         max_frames=max_frames,
         use_openface=use_openface,
-        openface_csv_dir=openface_csv_dir
+        openface_csv_dir=openface_csv_dir,
+        verbose=True
     )
 
     print(f"\n✅ Creati Dataset con split DOLOS!")
-    print("=" * 70 + "\n")
+    print("=" * 80 + "\n")
 
     return train_dataset, val_dataset, test_dataset
