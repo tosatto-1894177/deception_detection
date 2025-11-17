@@ -413,7 +413,7 @@ def test(config, use_dolos_fold=False):
 
     # 1. Trova l'ultima run di training e carica il best model
     models_dir = Path(config.get('paths.models_dir'))
-    run_dirs = sorted(models_dir.glob('multimodal_run_*'))
+    run_dirs = sorted(models_dir.glob('run_*'))
 
     if not run_dirs:
         print(f"\n Nessuna cartella di training trovata in: {models_dir}")
