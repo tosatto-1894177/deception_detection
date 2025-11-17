@@ -43,8 +43,8 @@ def parse_args():
                         help='Override device')
 
     # Subject split - se presente gestisce la creazione del dataset con subject split
-    #parser.add_argument('--subject_split', action='store_true',
-    #                    help='Usa subject-independent split custom (per training finale)')
+    parser.add_argument('--subject_split', action='store_true',
+                        help='Usa subject-independent split custom (per training finale)')
 
     # Split con fold DOLOS
     parser.add_argument('--dolos_fold', action='store_true',
