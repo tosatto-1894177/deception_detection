@@ -227,7 +227,7 @@ training:
     # CLASS_WEIGHTS: Pesi per bilanciare classi sbilanciate
     # - null: Pesi automatici (calcola da dataset)
     # - [1.0, 1.5]: Penalizza di più errori sulla classe 1 (deception)
-    class_weights: null
+    class_weights: [1.13, 0.88]
 
   # EARLY STOPPING: Ferma training se non migliora - evita overfitting e risparmia tempo
   early_stopping:
