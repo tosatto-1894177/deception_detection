@@ -77,6 +77,10 @@ class Trainer:
         self.global_step = 0
         self.best_val_f1 = 0.0
 
+        # Mixed Precision Training
+        self.scaler = torch.cuda.amp.GradScaler()
+        self.use_amp = True
+
     def _setup_loss(self):
         """Setta la loss function"""
         loss_type = self.config.get('training.loss.type', 'cross_entropy')
@@ -184,28 +188,33 @@ class Trainer:
             if openface is not None:
                 openface = openface.to(self.device)
 
-            # Forward pass - diverso per multimodal vs video-only
-            if self.is_multimodal:
-                logits, attention_dict = self.model(frames, mask, openface)
-                attention_weights = attention_dict['video']  # Usa video attention per stats
-            else:
-                logits, attention_weights = self.model(frames, mask)
+            # Forward pass ottimizzato per Mixed Precision Training - diverso per multimodal vs video-only
+            with torch.cuda.amp.autocast():
+                if self.is_multimodal:
+                    logits, attention_dict = self.model(frames, mask, openface)
+                    attention_weights = attention_dict['video']  # Usa video attention per stats
+                else:
+                    logits, attention_weights = self.model(frames, mask)
 
-            # Calcola loss
-            loss = self.criterion(logits, labels)
+                # Calcola loss
+                loss = self.criterion(logits, labels)
 
-            # Backward pass
+            # Backward pass ottimizzato per Mixed Precision Training
             self.optimizer.zero_grad()
-            loss.backward()
+            self.scaler.scale(loss).backward()
 
             # Gradient clipping
             if self.config.get('training.gradient_clip'):
+                # Ottimizzazione per Mixed Precision Training
+                self.scaler.unscale_(self.optimizer)
                 torch.nn.utils.clip_grad_norm_(
                     self.model.parameters(),
                     self.config['training']['gradient_clip']
                 )
 
-            self.optimizer.step()
+            # Optimizer step ottimizzato per Mixed Precision Training
+            self.scaler.step(self.optimizer)  # Invece di optimizer.step()
+            self.scaler.update()
 
             # Calcola metriche batch
             predictions = torch.argmax(logits, dim=1)
@@ -266,15 +275,16 @@ class Trainer:
             if openface is not None:
                 openface = openface.to(self.device)
 
-            # Forward pass
-            if self.is_multimodal:
-                logits, attention_dict = self.model(frames, mask, openface)
-                attention_weights = attention_dict['video']
-            else:
-                logits, attention_weights = self.model(frames, mask)
+            # Forward pass ottimizzato per Mixed Precision Training
+            with torch.cuda.amp.autocast():
+                if self.is_multimodal:
+                    logits, attention_dict = self.model(frames, mask, openface)
+                    attention_weights = attention_dict['video']
+                else:
+                    logits, attention_weights = self.model(frames, mask)
 
-            # Loss
-            loss = self.criterion(logits, labels)
+                # Loss
+                loss = self.criterion(logits, labels)
 
             # Calcola metriche batch
             predictions = torch.argmax(logits, dim=1)
