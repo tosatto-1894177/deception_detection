@@ -9,7 +9,7 @@ paths:
   frames_dir: "data/frames"
 
   # INPUT: Cartella con i csv delle feature estratte con Openface per ciascuna clip
-  openface_csv_dir: "data/openface"
+  openface_csv_dir: "data/openface2"
 
   # INPUT: File Excel con le annotazioni MUMIN
   train_annotations: "data/metadata/train_dolos.xlsx"
