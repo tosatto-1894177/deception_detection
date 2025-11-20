@@ -49,7 +49,7 @@ class ResNetFeatureExtractor(nn.Module):
 class TemporalConvBlock(nn.Module):
     """Singolo blocco convoluzionale temporale con residual connection."""
 
-    def __init__(self, in_channels, out_channels, kernel_size, dropout=0.2):
+    def __init__(self, in_channels, out_channels, kernel_size, dropout=0.3):
         super().__init__()
 
         # Padding per mantenere lunghezza temporale
@@ -101,7 +101,7 @@ class TemporalConvBlock(nn.Module):
 class TemporalConvNet(nn.Module):
     """Temporal Convolutional Network per catturare dipendenze temporali"""
 
-    def __init__(self, input_dim, hidden_channels, kernel_size=3, dropout=0.2):
+    def __init__(self, input_dim, hidden_channels, kernel_size=3, dropout=0.3):
         """
         Args:
             input_dim: Dimensione feature input (512 per ResNet34)
@@ -193,7 +193,7 @@ class TemporalAttention(nn.Module):
 class MLPClassifier(nn.Module):
     """MLP finale per classificazione"""
 
-    def __init__(self, input_dim, hidden_dims, num_classes=2, dropout=0.3):
+    def __init__(self, input_dim, hidden_dims, num_classes=2, dropout=0.4):
         """
         Args:
             input_dim: Dimensione input da attention
@@ -341,7 +341,7 @@ class OpenFaceBranch(nn.Module):
     """
 
     def __init__(self, input_dim=49, output_dim=64, tcn_channels=None,
-                 kernel_size=3, dropout=0.2):
+                 kernel_size=3, dropout=0.4):
         """
         Args:
             input_dim: Dimensione input OpenFace (default 49)
@@ -435,7 +435,7 @@ class DcDtModelV2(nn.Module):
             input_dim=video_feature_dim,
             hidden_channels=config.get('model.tcn.hidden_channels'),
             kernel_size=config.get('model.tcn.kernel_size'),
-            dropout=config.get('model.tcn.dropout')
+            dropout=config.get('model.tcn.dropout', 0.3)
         )
         video_tcn_output_dim = self.video_tcn.output_dim
 
@@ -457,7 +457,7 @@ class DcDtModelV2(nn.Module):
             #hidden_dim=openface_hidden_dim,
             #tcn_channels=openface_tcn_channels,
             kernel_size=config.get('model.tcn.kernel_size', 3),
-            dropout=config.get('model.tcn.dropout', 0.2)
+            dropout=config.get('model.openface.dropout', 0.4)
         )
 
         # Fusion layer -> Late fusion
@@ -470,7 +470,7 @@ class DcDtModelV2(nn.Module):
             input_dim=fusion_input_dim,
             hidden_dims=fusion_hidden_dims,
             num_classes=config.get('model.classifier.num_classes', 2),
-            dropout=config.get('model.classifier.dropout', 0.3)
+            dropout=config.get('model.classifier.dropout', 0.4)
         )
 
         print(f"\n{'=' * 80}")

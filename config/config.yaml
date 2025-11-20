@@ -130,8 +130,8 @@ model:
     kernel_size: 3
 
     # DROPOUT: Probabilità di "spegnere" neuroni (previene overfitting)
-    # - 0.2 = 20% neuroni spenti casualmente durante training
-    dropout: 0.2
+    # - 0.3 = 30% neuroni spenti casualmente durante training
+    dropout: 0.3
 
     # HIDDEN_CHANNELS: Numero di canali (feature) per ogni layer
     # - [256, 256, 256]: 3 layer con 256 canali ciascuno
@@ -143,11 +143,14 @@ model:
     #hidden_dim: 128
     output_dim: 64
     #tcn_channels: [128]
+    dropout: 0.4
 
   # Configurazione Fusion Layer
   fusion:
     #hidden_dims: [256, 128]  # MLP dopo concatenazione (384 -> 256 -> 128 -> 2)
-    hidde_dims: [192, 96] # ridotto perchè fusion_dim nuova = 256+64 = 320
+    hidden_dims: [192, 96] # ridotto perchè fusion_dim nuova = 256+64 = 320
+
+    dropout: 0.4
 
   # ATTENTION: Attention pooling per valutare il "peso" dei frame
   attention:
@@ -170,7 +173,7 @@ model:
     hidden_dims: [128, 64]
 
     # DROPOUT:
-    dropout: 0.3
+    dropout: 0.4
 
     # NUM_CLASSES: Numero di classi da predire
     # - 2: Truth (0) vs Deception (1) → BINARIA
@@ -194,7 +197,7 @@ training:
 
   # WEIGHT_DECAY: Regolarizzazione L2 (previene overfitting)
   # - 0.01: Valore tipico per adamw
-  weight_decay: 0.01
+  weight_decay: 0.04
 
   # OPTIMIZER: Algoritmo di ottimizzazione
   # - 'adam': Il migliore per la maggior parte dei casi

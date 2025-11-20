@@ -189,7 +189,7 @@ class Trainer:
                 openface = openface.to(self.device)
 
             # Forward pass ottimizzato per Mixed Precision Training - diverso per multimodal vs video-only
-            with torch.cuda.amp.autocast():
+            with torch.cuda.amp.autocast(device_tipe=self.device):
                 if self.is_multimodal:
                     logits, attention_dict = self.model(frames, mask, openface)
                     attention_weights = attention_dict['video']  # Usa video attention per stats
@@ -276,7 +276,7 @@ class Trainer:
                 openface = openface.to(self.device)
 
             # Forward pass ottimizzato per Mixed Precision Training
-            with torch.cuda.amp.autocast():
+            with torch.cuda.amp.autocast(device_tipe=self.device):
                 if self.is_multimodal:
                     logits, attention_dict = self.model(frames, mask, openface)
                     attention_weights = attention_dict['video']
