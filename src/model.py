@@ -447,20 +447,23 @@ class DcDtModelV2(nn.Module):
         # Branch Openface
         openface_config = config.get('model.openface', {})
         openface_input_dim = openface_config.get('input_dim', 49)
-        openface_hidden_dim = openface_config.get('hidden_dim', 128)
-        openface_tcn_channels = openface_config.get('tcn_channels', [128])
+        openface_output_dim = openface_config.get('output_dim', 64)
+        #openface_hidden_dim = openface_config.get('hidden_dim', 128)
+        #openface_tcn_channels = openface_config.get('tcn_channels', [128])
 
         self.openface_branch = OpenFaceBranch(
             input_dim=openface_input_dim,
-            hidden_dim=openface_hidden_dim,
-            tcn_channels=openface_tcn_channels,
+            output_dim=openface_output_dim,
+            #hidden_dim=openface_hidden_dim,
+            #tcn_channels=openface_tcn_channels,
             kernel_size=config.get('model.tcn.kernel_size', 3),
             dropout=config.get('model.tcn.dropout', 0.2)
         )
 
         # Fusion layer -> Late fusion
         fusion_input_dim = video_tcn_output_dim + self.openface_branch.output_dim
-        fusion_hidden_dims = config.get('model.fusion.hidden_dims', [256, 128])
+        fusion_hidden_dims = config.get('model.fusion.hidden_dims', [192, 96])
+        #fusion_hidden_dims = config.get('model.fusion.hidden_dims', [256, 128])
 
         # Classificatore finale
         self.fusion_classifier = MLPClassifier(
