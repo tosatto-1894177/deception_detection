@@ -340,44 +340,44 @@ class OpenFaceBranch(nn.Module):
     Input (B, T, 49) → MLP Encoder → TCN → Attention → Context (B, 128)
     """
 
-    def __init__(self, input_dim=49, hidden_dim=128, tcn_channels=None,
+    def __init__(self, input_dim=49, output_dim=64, tcn_channels=None,
                  kernel_size=3, dropout=0.2):
         """
         Args:
             input_dim: Dimensione input OpenFace (default 49)
-            hidden_dim: Dimensione hidden layer (default 128)
+            output_dim: Dimensione layer output (default 64)
             tcn_channels: Lista canali TCN (default [128])
             kernel_size: Kernel size per TCN
             dropout: Dropout rate
         """
         super().__init__()
 
-        if tcn_channels is None:
-            tcn_channels = [hidden_dim]
+        #if tcn_channels is None:
+        #    tcn_channels = [hidden_dim]
 
         # 1. MLP Encoder: normalizza e proietta le features OpenFace
         self.encoder = nn.Sequential(
-            nn.Linear(input_dim, hidden_dim),
-            nn.LayerNorm(hidden_dim),
+            nn.Linear(input_dim, output_dim),
+            nn.LayerNorm(output_dim),
             nn.ReLU(),
             nn.Dropout(dropout)
         )
 
         # 2. TCN: cattura dinamiche temporali
-        self.tcn = TemporalConvNet(
-            input_dim=hidden_dim,
-            hidden_channels=tcn_channels,
-            kernel_size=kernel_size,
-            dropout=dropout
-        )
+        #self.tcn = TemporalConvNet(
+        #    input_dim=hidden_dim,
+        #    hidden_channels=tcn_channels,
+        #    kernel_size=kernel_size,
+        #    dropout=dropout
+        #)
 
         # 3. Attention: aggrega frame temporali
         self.attention = TemporalAttention(
-            input_dim=tcn_channels[-1],
-            hidden_dim=64
+            input_dim=output_dim,
+            hidden_dim=32 # ridotto da 64
         )
 
-        self.output_dim = tcn_channels[-1]
+        self.output_dim = output_dim
 
     def forward(self, openface_features, mask=None):
         """
@@ -395,7 +395,7 @@ class OpenFaceBranch(nn.Module):
         x = self.encoder(openface_features)
 
         # 2. Modeling temporale con TCN: (B, T, hidden_dim) → (B, T, output_dim)
-        x = self.tcn(x, mask)
+        # x = self.tcn(x, mask)
 
         # 3. Aggrega con Attention: (B, T, output_dim) → (B, output_dim)
         context, attention_weights = self.attention(x, mask)
