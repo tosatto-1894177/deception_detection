@@ -47,7 +47,7 @@ def parse_args():
                         help='Usa fold DOLOS ufficiali')
 
     # AGGIUNGI QUESTO
-    parser.add_argument('--fold_idx', type=int, help='Override fold index (1, 2, or 3)')
+    parser.add_argument('--fold_idx', type=int, choices=[1, 2, 3], help='Override fold index (1, 2, or 3)')
 
     return parser.parse_args()
 
