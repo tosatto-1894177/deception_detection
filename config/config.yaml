@@ -141,14 +141,15 @@ model:
   openface:
     input_dim: 49  # 17 AU intensity + 18 AU presence + 8 gaze + 6 pose
     #hidden_dim: 128
-    output_dim: 64
+    output_dim: 32
     #tcn_channels: [128]
     dropout: 0.4
 
   # Configurazione Fusion Layer
   fusion:
     #hidden_dims: [256, 128]  # MLP dopo concatenazione (384 -> 256 -> 128 -> 2)
-    hidden_dims: [192, 96] # ridotto perchè fusion_dim nuova = 256+64 = 320
+    #hidden_dims: [192, 96] # ridotto perchè fusion_dim nuova = 256+64 = 320
+    hidden_dims: [128, 64] # ridotto perchè fusion_dim nuova = 256+32 = 288
 
     dropout: 0.4
 
