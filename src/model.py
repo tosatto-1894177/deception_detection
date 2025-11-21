@@ -340,14 +340,11 @@ class OpenFaceBranch(nn.Module):
     Input (B, T, 49) → MLP Encoder → TCN → Attention → Context (B, 128)
     """
 
-    def __init__(self, input_dim=49, output_dim=32, tcn_channels=None,
-                 kernel_size=3, dropout=0.4):
+    def __init__(self, input_dim=49, output_dim=64, dropout=0.4):
         """
         Args:
             input_dim: Dimensione input OpenFace (default 49)
-            output_dim: Dimensione layer output (default 32)
-            tcn_channels: Lista canali TCN (default [128])
-            kernel_size: Kernel size per TCN
+            output_dim: Dimensione layer output (default 64)
             dropout: Dropout rate
         """
         super().__init__()
@@ -362,14 +359,6 @@ class OpenFaceBranch(nn.Module):
             nn.ReLU(),
             nn.Dropout(dropout)
         )
-
-        # 2. TCN: cattura dinamiche temporali
-        #self.tcn = TemporalConvNet(
-        #    input_dim=hidden_dim,
-        #    hidden_channels=tcn_channels,
-        #    kernel_size=kernel_size,
-        #    dropout=dropout
-        #)
 
         # 3. Attention: aggrega frame temporali
         self.attention = TemporalAttention(
@@ -447,23 +436,17 @@ class DcDtModelV2(nn.Module):
         # Branch Openface
         openface_config = config.get('model.openface', {})
         openface_input_dim = openface_config.get('input_dim', 49)
-        openface_output_dim = openface_config.get('output_dim', 32)
-        #openface_hidden_dim = openface_config.get('hidden_dim', 128)
-        #openface_tcn_channels = openface_config.get('tcn_channels', [128])
+        openface_output_dim = openface_config.get('output_dim', 64)
 
         self.openface_branch = OpenFaceBranch(
             input_dim=openface_input_dim,
             output_dim=openface_output_dim,
-            #hidden_dim=openface_hidden_dim,
-            #tcn_channels=openface_tcn_channels,
-            kernel_size=config.get('model.tcn.kernel_size', 3),
             dropout=config.get('model.openface.dropout', 0.4)
         )
 
         # Fusion layer -> Late fusion
         fusion_input_dim = video_tcn_output_dim + self.openface_branch.output_dim
-        fusion_hidden_dims = config.get('model.fusion.hidden_dims', [128, 64])
-        #fusion_hidden_dims = config.get('model.fusion.hidden_dims', [256, 128])
+        fusion_hidden_dims = config.get('model.fusion.hidden_dims', [192, 96])
 
         # Classificatore finale
         self.fusion_classifier = MLPClassifier(

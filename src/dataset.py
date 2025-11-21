@@ -9,8 +9,6 @@ from pathlib import Path
 from torch.utils.data import Dataset
 import torchvision.transforms as transforms
 import numpy as np
-import sys
-# sys.path.append(str(Path(__file__).parent.parent))  # Per importare da root
 from openface_loader import OpenFaceLoader
 
 
@@ -323,7 +321,7 @@ def create_dolos_fold_split(frames_dir, annotation_file,
                             val_ratio=0.2, seed=42, max_frames=50,
                             use_openface=False, openface_csv_dir=None):
     """
-    Usa i fold DOLOS ufficiali - non supporta subject-independent split
+    Usa i fold DOLOS ufficiali
 
     Split del train fold tra train e val randomicamente
 

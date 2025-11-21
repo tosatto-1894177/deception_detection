@@ -42,13 +42,12 @@ def parse_args():
     parser.add_argument('--device', type=str, choices=['cpu', 'cuda'],
                         help='Override device')
 
-    # Subject split - se presente gestisce la creazione del dataset con subject split
-    parser.add_argument('--subject_split', action='store_true',
-                        help='Usa subject-independent split custom (per training finale)')
-
     # Split con fold DOLOS
     parser.add_argument('--dolos_fold', action='store_true',
                         help='Usa fold DOLOS ufficiali')
+
+    # AGGIUNGI QUESTO
+    parser.add_argument('--fold_idx', type=int, help='Override fold index (1, 2, or 3)')
 
     return parser.parse_args()
 
@@ -85,15 +84,14 @@ def preprocess(config):
     print(f"  Frame salvati in: {frames_dir}")
 
 
-def create_dataloaders(config, use_subject_split=False, use_dolos_fold=False):
+def create_dataloaders(config, use_dolos_fold=False):
     """
     Crea DataLoader per train/val/test
 
     Args:
         config: config.yaml
-        use_subject_split: Se True utilizza la funzione per fare subject-independent split
-        use_dolos_fold: Se True, utilizza i fold DOLOS ufficiali (non subject-independent)
-        Se entrambi False, utilizza random split (più veloce per test)
+        use_dolos_fold: Se True, utilizza i fold DOLOS ufficiali
+        Se False, utilizza random split (più veloce per test)
     """
     print("\n" + "="*80)
     print("CARICAMENTO DATASET")
@@ -126,25 +124,6 @@ def create_dataloaders(config, use_subject_split=False, use_dolos_fold=False):
             use_openface=use_openface,
             openface_csv_dir=openface_csv_dir
         )
-
-    """elif use_subject_split:
-        # Subject-Independent Split
-
-        from src.frame_dataset import create_subject_independent_split
-
-        # Path ai fold DOLOS (puoi cambiare fold_idx nel config)
-        fold_idx = config.get('dataset.fold_idx', 1)
-        train_fold_path = Path(f'data/splits/train_fold{fold_idx}.csv')
-        test_fold_path = Path(f'data/splits/test_fold{fold_idx}.csv')
-
-        train_dataset, val_dataset, test_dataset = create_subject_independent_split(
-            frames_dir=frames_dir,
-            annotation_file=annotation_file,
-            train_fold_path=train_fold_path,
-            test_fold_path=test_fold_path,
-            val_ratio=config.get('dataset.val_ratio', 0.2),
-            seed=config.get('dataset.seed', 42)
-        )"""
 
     # Crea DataLoaders
     train_loader = DataLoader(
@@ -182,7 +161,7 @@ def create_dataloaders(config, use_subject_split=False, use_dolos_fold=False):
     return train_loader, val_loader, test_loader
 
 
-def test_with_real_batch(config, use_subject_split=False, use_dolos_fold=False):
+def test_with_real_batch(config, use_dolos_fold=False):
     """
     Funzione di utility:
         Esegue un test con un batch reale dal dataset
@@ -193,7 +172,7 @@ def test_with_real_batch(config, use_subject_split=False, use_dolos_fold=False):
     print("="*80)
 
     # Crea il dataloader
-    train_loader, _, _ = create_dataloaders(config, use_subject_split, use_dolos_fold)
+    train_loader, _, _ = create_dataloaders(config, use_dolos_fold)
 
     # Costruisce il modello
     model, device = build_model(config)
@@ -285,7 +264,7 @@ def demo_mode(config, use_dolos_fold=False):
     print(f"  Split: {'DOLOS Fold' if use_dolos_fold else 'Random'}")
 
     # Crea dataloaders con RANDOM split
-    train_loader, val_loader, test_loader = create_dataloaders(config, use_subject_split=False, use_dolos_fold=use_dolos_fold)
+    train_loader, val_loader, test_loader = create_dataloaders(config, use_dolos_fold=use_dolos_fold)
 
     # Limita a pochi batch per demo
     print(f"\n⚠️  Demo mode: usando solo 20 samples train, 6 val")
@@ -364,15 +343,14 @@ def demo_mode(config, use_dolos_fold=False):
     print(f"   Se tutto è OK, esegui training completo con --mode train")
 
 
-def train(config, use_subject_split=False, use_dolos_fold=False):
+def train(config,  use_dolos_fold=False):
     """
     Training completo del modello
 
     Args:
         config: config.yaml
-        use_subject_split: Se True utilizza la funzione per fare subject-independent split
-        use_dolos_fold: Se True, utilizza i fold DOLOS ufficiali (non subject-independent)
-        Se entrambi False, utilizza random split (più veloce per test)
+        use_dolos_fold: Se True, utilizza i fold DOLOS ufficiali
+        Se False, utilizza random split (più veloce per test)
     """
     print("\n" + "="*80)
     print("TRAINING COMPLETO")
@@ -384,7 +362,7 @@ def train(config, use_subject_split=False, use_dolos_fold=False):
     config.update({'paths': {'models_dir': str(run_dir)}})
 
     # Crea dataloaders
-    train_loader, val_loader, test_loader = create_dataloaders(config, use_subject_split, use_dolos_fold)
+    train_loader, val_loader, test_loader = create_dataloaders(config, use_dolos_fold)
 
     # Costruisce il trainer, ovvero costruisce il modello e lo addestra
     trainer = train_model(config, train_loader, val_loader)
@@ -534,6 +512,8 @@ def main():
         config.update({'training': {'num_epochs': args.epochs}})
     if args.device:
         config.update({'training': {'device': args.device}})
+    if args.fold_idx:
+        config.update({'dataset': {'fold_idx': args.fold_idx}})
 
     # Crea directory
     config.create_directories()
@@ -548,10 +528,10 @@ def main():
     elif args.mode == 'train':
 
         # Prima testa con batch reale
-        test_with_real_batch(config, args.subject_split, args.dolos_fold)
+        test_with_real_batch(config, args.dolos_fold)
 
         # Poi training completo
-        train(config, args.subject_split, args.dolos_fold)
+        train(config, args.dolos_fold)
 
     elif args.mode == 'test':
         test(config, use_dolos_fold=args.dolos_fold)
