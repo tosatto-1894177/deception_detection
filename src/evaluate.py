@@ -110,7 +110,7 @@ class Evaluator:
                     openface = openface.to(self.device)
 
                 # Forward pass ottimizzato per Mixed Precision Training
-                with torch.cuda.amp.autocast(device_tipe=self.device):
+                with torch.cuda.amp.autocast('cuda'):
                     if self.is_multimodal:
                         logits, attention_dict = self.model(frames, mask, openface)
                         attention_weights = attention_dict['video']  # Usa video attention
