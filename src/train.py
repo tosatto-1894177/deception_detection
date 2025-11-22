@@ -151,10 +151,12 @@ class Trainer:
 
         elif scheduler_type == 'plateau':
             # Riduce quando validation non migliora
-            patience = scheduler_config.get('patience', 5)
+            patience = scheduler_config.get('patience', 3)
+            factor = scheduler_config.get('gamma', 0.5)
+            min_lr = scheduler_config.get('min_lr', 0.0001)
             scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-                self.optimizer, mode='max', factor=0.5,
-                patience=patience
+                self.optimizer, mode='max', factor=factor,
+                patience=patience, min_lr=min_lr
             )
             print(f"LR Scheduler: ReduceLROnPlateau (patience={patience})")
 

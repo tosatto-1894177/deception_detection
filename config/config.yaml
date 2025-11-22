@@ -209,7 +209,7 @@ training:
     # - 'cosine': Riduzione smooth (coseno)
     # - 'plateau': Riduci quando validation non migliora
     # - null: Nessuno scheduler (LR fisso)
-    type: "cosine"
+    type: "plateau"
 
     # STEP_SIZE: Ogni quante epoch ridurre LR (solo per 'step')
     step_size: 10
@@ -219,7 +219,10 @@ training:
     gamma: 0.5
 
     # PATIENCE: Epoch di attesa prima di ridurre (solo per 'plateau')
-    patience: 5
+    patience: 3
+
+    # MIN_LR: lr minimo sotto cui non scendere (per plateau)
+    min_lr: 0.0001
 
     # T_max: num epochs
     T_max: 20
