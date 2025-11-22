@@ -112,16 +112,11 @@ class Trainer:
         Returns:
             list: [weight_truth, weight_deception]
         """
-        # Conta le classi nel training set
-        labels = []
-        for batch_data in self.train_loader:
-            if len(batch_data) == 6:
-                _, batch_labels, _, _, _, _ = batch_data
-            else:
-                _, batch_labels, _, _, _ = batch_data
-            labels.extend(batch_labels.tolist())
-
+        # Accede al dataset ed estrae le label
+        dataset = self.train_loader.dataset
+        labels = [sample['label'] for sample in dataset.samples]
         labels = np.array(labels)
+
         n_samples = len(labels)
         n_classes = 2
 
