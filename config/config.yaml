@@ -18,7 +18,7 @@ paths:
   models_dir: "models/checkpoints"
 
   # OUTPUT: Log per TensorBoard e file di log testuale
-  logs_dir: "logs"
+  #logs_dir: "logs"
 
   # OUTPUT: Risultati finali (metriche, confusion matrix, predizioni)
   results_dir: "results"
