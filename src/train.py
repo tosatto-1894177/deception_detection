@@ -12,7 +12,7 @@ import time
 from datetime import datetime
 from src.model import build_model
 from src.metrics import MetricsTracker, MetricsVisualizer
-
+import numpy as np
 
 class Trainer:
     """
@@ -89,17 +89,62 @@ class Trainer:
             # Class weights per bilanciare classi
             class_weights = self.config.get('training.loss.class_weights')
 
-            if class_weights is not None:
+            if class_weights is None:
+                class_weights = self._compute_class_weights()
+                weights = torch.tensor(class_weights, dtype=torch.float32).to(self.device)
+                criterion = nn.CrossEntropyLoss(weight=weights)
+                print(f"✓ Using CrossEntropyLoss with auto class weights: {class_weights}")
+            else:
                 weights = torch.tensor(class_weights, dtype=torch.float32).to(self.device)
                 criterion = nn.CrossEntropyLoss(weight=weights)
                 print(f"Using CrossEntropyLoss with class weights: {class_weights}")
-            else:
-                criterion = nn.CrossEntropyLoss()
-                print("Using CrossEntropyLoss (no class weights)")
         else:
             raise ValueError(f"Loss type '{loss_type}' non supportato")
 
         return criterion
+
+    def _compute_class_weights(self):
+        """
+        Calcola class weights bilanciati dal training set
+
+        Formula: weight_class = n_samples / (n_classes * n_samples_class)
+
+        Returns:
+            list: [weight_truth, weight_deception]
+        """
+        # Conta le classi nel training set
+        labels = []
+        for batch_data in self.train_loader:
+            if len(batch_data) == 6:
+                _, batch_labels, _, _, _, _ = batch_data
+            else:
+                _, batch_labels, _, _, _ = batch_data
+            labels.extend(batch_labels.tolist())
+
+        labels = np.array(labels)
+        n_samples = len(labels)
+        n_classes = 2
+
+        # Conta samples per classe
+        n_truth = np.sum(labels == 0)
+        n_deception = np.sum(labels == 1)
+
+        # Calcola weights bilanciati (inversamente proporzionali alla frequenza)
+        weight_truth = n_samples / (n_classes * n_truth)
+        weight_deception = n_samples / (n_classes * n_deception)
+
+        print(f"\n{'=' * 80}")
+        print("CLASS WEIGHTS COMPUTATION")
+        print(f"{'=' * 80}")
+        print(f"Training set distribution:")
+        print(f"  Truth:     {n_truth:4d} samples ({n_truth / n_samples * 100:.1f}%)")
+        print(f"  Deception: {n_deception:4d} samples ({n_deception / n_samples * 100:.1f}%)")
+        print(f"Computed weights:")
+        print(f"  Truth:     {weight_truth:.4f}")
+        print(f"  Deception: {weight_deception:.4f}")
+        print(f"{'=' * 80}\n")
+
+        return [weight_truth, weight_deception]
 
     def _setup_optimizer(self):
         """Setta l'optimizer che si occupa di aggiornare i pesi"""
