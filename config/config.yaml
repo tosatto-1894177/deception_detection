@@ -8,9 +8,6 @@ paths:
   # INPUT: Frame estratti dalle clip con volti ritagliati
   frames_dir: "data/frames"
 
-  # INPUT: Cartella con i csv delle feature estratte con Openface per ciascuna clip
-  openface_csv_dir: "data/openface2"
-
   # INPUT: File Excel con le annotazioni MUMIN
   train_annotations: "data/metadata/train_dolos.xlsx"
 
@@ -18,7 +15,7 @@ paths:
   models_dir: "models/checkpoints"
 
   # OUTPUT: Log per TensorBoard e file di log testuale
-  #logs_dir: "logs"
+  logs_dir: "logs"
 
   # OUTPUT: Risultati finali (metriche, confusion matrix, predizioni)
   results_dir: "results"
@@ -69,11 +66,13 @@ dataset:
   # SEED: Per riproducibilità
   seed: 42
 
+  # BEHAVIORAL FEATURES: Feature MUMIN (colonne CSV come "Smile", "Gaze", ecc.)
+  # - false: Usa solo video (ResNet)
+  # - true: Carica anche feature MUMIN dall'excel (per fusion futura con OpenFace)
+  use_behavioral_features: false
+
   # Split type
   fold_idx: 1  # Per fold dolos (1, 2, o 3)
-
-  # Se True viene implementato il modello multimodale
-  use_openface: True
 
   # DATA AUGMENTATION
   augmentation:
@@ -95,14 +94,13 @@ dataset:
 # MODEL
 # Architettura del modello
 model:
-  name: "DcDt_model_1"
-
-  # Indica se il modello da addestrare è video-only o multimodale
-  type: multimodal
+  name: "DcDt_model_0"
+  type: "video_only"
 
   # RESNET: Feature extractor
   resnet:
     # - 'resnet34': 512 features
+    # - 'resnet50': 2048 features
     architecture: "resnet34"
 
     # PRETRAINED: Usa pesi pre-allenati su ImageNet
@@ -129,27 +127,12 @@ model:
     kernel_size: 3
 
     # DROPOUT: Probabilità di "spegnere" neuroni (previene overfitting)
-    # - 0.3 = 30% neuroni spenti casualmente durante training
-    dropout: 0.3
+    # - 0.2 = 20% neuroni spenti casualmente durante training
+    dropout: 0.2
 
     # HIDDEN_CHANNELS: Numero di canali (feature) per ogni layer
     # - [256, 256, 256]: 3 layer con 256 canali ciascuno
     hidden_channels: [256, 256, 256]
-
-  # Configurazione branch OpenFace
-  openface:
-    input_dim: 49  # 17 AU intensity + 18 AU presence + 8 gaze + 6 pose
-    #hidden_dim: 128
-    output_dim: 64
-    #tcn_channels: [128]
-    dropout: 0.4
-
-  # Configurazione Fusion Layer
-  fusion:
-    #hidden_dims: [256, 128]  # MLP dopo concatenazione (384 -> 256 -> 128 -> 2)
-    hidden_dims: [192, 96] # ridotto perchè fusion_dim nuova = 256+64 = 320
-
-    dropout: 0.4
 
   # ATTENTION: Attention pooling per valutare il "peso" dei frame
   attention:
@@ -172,7 +155,7 @@ model:
     hidden_dims: [128, 64]
 
     # DROPOUT:
-    dropout: 0.4
+    dropout: 0.3
 
     # NUM_CLASSES: Numero di classi da predire
     # - 2: Truth (0) vs Deception (1) → BINARIA
@@ -196,7 +179,7 @@ training:
 
   # WEIGHT_DECAY: Regolarizzazione L2 (previene overfitting)
   # - 0.01: Valore tipico per adamw
-  weight_decay: 0.05
+  weight_decay: 0.01
 
   # OPTIMIZER: Algoritmo di ottimizzazione
   # - 'adam': Il migliore per la maggior parte dei casi
@@ -209,7 +192,7 @@ training:
     # - 'cosine': Riduzione smooth (coseno)
     # - 'plateau': Riduci quando validation non migliora
     # - null: Nessuno scheduler (LR fisso)
-    type: "plateau"
+    type: "cosine"
 
     # STEP_SIZE: Ogni quante epoch ridurre LR (solo per 'step')
     step_size: 10
@@ -219,10 +202,7 @@ training:
     gamma: 0.5
 
     # PATIENCE: Epoch di attesa prima di ridurre (solo per 'plateau')
-    patience: 3
-
-    # MIN_LR: lr minimo sotto cui non scendere (per plateau)
-    min_lr: 0.0001
+    patience: 5
 
     # T_max: num epochs
     T_max: 20
@@ -241,7 +221,7 @@ training:
     enabled: true  # Attiva/disattiva
 
     # PATIENCE: Quante epoch aspettare senza miglioramento prima di fermare
-    patience: 12
+    patience: 8
 
     # MIN_DELTA: Miglioramento minimo considerato "vero miglioramento"
     # - 0.001: Deve migliorare di almeno 0.1% per contare
@@ -323,7 +303,7 @@ logging:
     enabled: false  # Non ancora attivato account wandb
     project: "deception-detection"
     entity: null  # Username wandb
-    name: "DcDt_model_1_run_1"
+    name: "DcDt_model_0_run_1"
 
   # TENSORBOARD: Visualizzazione locale
   tensorboard:
@@ -352,3 +332,24 @@ reproducibility:
   # - false: Deterministico
   # NOTA: Se deterministic=true, questo viene ignorato
   benchmark: true
+
+
+# -------------------- EXPERIMENTAL --------------------
+# Feature da aggiungere in futuro
+experimental:
+  # OPENFACE: Feature aggiuntive (AUs, gaze, pose)
+  openface:
+    enabled: false  # true quando verrà implementato OpenFace
+    features: ["AUs", "gaze", "pose"]
+    fusion_method: "concat"  # Come combinare con feature video - o 'attention'
+
+  # CLASS_BALANCING: Gestione classi sbilanciate
+  class_balancing:
+    # - 'oversample': Duplica campioni classe minoritaria
+    # - 'undersample': Rimuovi campioni classe maggioritaria
+    # - 'weighted_loss': Usa class_weights in loss
+    # - null: Nessun bilanciamento
+    method: null
+
+  # MIXED_PRECISION: Training in precisione mista (FP16)
+  mixed_precision: false
