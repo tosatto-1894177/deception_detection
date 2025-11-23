@@ -86,60 +86,13 @@ class Trainer:
         loss_type = self.config.get('training.loss.type', 'cross_entropy')
 
         if loss_type == 'cross_entropy':
-            # Class weights per bilanciare classi
-            class_weights = self.config.get('training.loss.class_weights')
-
-            if class_weights is None:
-                class_weights = self._compute_class_weights()
-                weights = torch.tensor(class_weights, dtype=torch.float32).to(self.device)
-                criterion = nn.CrossEntropyLoss(weight=weights)
-                print(f"✓ Using CrossEntropyLoss with auto class weights: {class_weights}")
-            else:
-                weights = torch.tensor(class_weights, dtype=torch.float32).to(self.device)
-                criterion = nn.CrossEntropyLoss(weight=weights)
-                print(f"Using CrossEntropyLoss with class weights: {class_weights}")
+            # Cross Entry senza pesi
+            criterion = nn.CrossEntropyLoss()
+            print(f"Using CrossEntropyLoss with no class weights")
         else:
             raise ValueError(f"Loss type '{loss_type}' non supportato")
 
         return criterion
-
-    def _compute_class_weights(self):
-        """
-        Calcola class weights bilanciati dal training set
-
-        Formula: weight_class = n_samples / (n_classes * n_samples_class)
-
-        Returns:
-            list: [weight_truth, weight_deception]
-        """
-        # Accede al dataset ed estrae le label
-        dataset = self.train_loader.dataset
-        labels = [sample['label'] for sample in dataset.samples]
-        labels = np.array(labels)
-
-        n_samples = len(labels)
-        n_classes = 2
-
-        # Conta samples per classe
-        n_truth = np.sum(labels == 0)
-        n_deception = np.sum(labels == 1)
-
-        # Calcola weights bilanciati (inversamente proporzionali alla frequenza)
-        weight_truth = n_samples / (n_classes * n_truth)
-        weight_deception = n_samples / (n_classes * n_deception)
-
-        print(f"\n{'=' * 80}")
-        print("CLASS WEIGHTS COMPUTATION")
-        print(f"{'=' * 80}")
-        print(f"Training set distribution:")
-        print(f"  Truth:     {n_truth:4d} samples ({n_truth / n_samples * 100:.1f}%)")
-        print(f"  Deception: {n_deception:4d} samples ({n_deception / n_samples * 100:.1f}%)")
-        print(f"Computed weights:")
-        print(f"  Truth:     {weight_truth:.4f}")
-        print(f"  Deception: {weight_deception:.4f}")
-        print(f"{'=' * 80}\n")
-
-        return [weight_truth, weight_deception]
 
     def _setup_optimizer(self):
         """Setta l'optimizer che si occupa di aggiornare i pesi"""

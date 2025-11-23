@@ -196,7 +196,7 @@ training:
 
   # WEIGHT_DECAY: Regolarizzazione L2 (previene overfitting)
   # - 0.01: Valore tipico per adamw
-  weight_decay: 0.04
+  weight_decay: 0.05
 
   # OPTIMIZER: Algoritmo di ottimizzazione
   # - 'adam': Il migliore per la maggior parte dei casi
@@ -241,7 +241,7 @@ training:
     enabled: true  # Attiva/disattiva
 
     # PATIENCE: Quante epoch aspettare senza miglioramento prima di fermare
-    patience: 8
+    patience: 12
 
     # MIN_DELTA: Miglioramento minimo considerato "vero miglioramento"
     # - 0.001: Deve migliorare di almeno 0.1% per contare
